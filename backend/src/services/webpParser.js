@@ -19,7 +19,7 @@ async function parseWebp(webpFilePath) {
   }
 
   const frameW = meta.width;
-  // sharp stacks all pages vertically: total height = frameH * pages
+  // meta.height from animated:true is total stacked height (frameH * pages)
   const frameH = Math.round(meta.height / meta.pages);
 
   // Per-frame delay (ms). Use average to derive fps.
@@ -30,9 +30,11 @@ async function parseWebp(webpFilePath) {
   console.log(`[webpParser] ${frameW}x${frameH} fps=${fps} frames=${meta.pages}`);
 
   // Extract each frame as a raw PNG buffer
+  // NOTE: must use { page: i } WITHOUT animated:true — animated:true ignores page and
+  // returns the full vertically-stacked image for all frames.
   const frameBuffers = [];
   for (let i = 0; i < meta.pages; i++) {
-    const buf = await sharp(webpFilePath, { animated: true, page: i })
+    const buf = await sharp(webpFilePath, { page: i })
       .png()
       .toBuffer();
     frameBuffers.push(buf);
