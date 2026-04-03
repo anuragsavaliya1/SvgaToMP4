@@ -207,4 +207,71 @@ router.post('/audio', upload.single('file'), async (req, res) => {
   }
 });
 
+// ─── POST /api/svga/mp4 ───────────────────────────────────────────────────────
+//
+// Simple endpoint for batch processing via Postman.
+//
+// Request (multipart/form-data):
+//   file   — .svga file  (required)
+//   format — 'mp4' | 'webm'  (optional, default: mp4)
+//
+// Success response:
+//   { "url": "http://host:port/outputs/xxxx.mp4" }
+//
+// Error response:
+//   { "error": "description" }
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/mp4', upload.single('file'), async (req, res) => {
+  const jobId = uuidv4();
+  const jobTempDir = path.join(TEMP_DIR, jobId);
+  let uploadedPath = null;
+
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded. Send the .svga file as form-data field "file".' });
+    }
+
+    uploadedPath = req.file.path;
+    const format = req.body.format === 'webm' ? 'webm' : 'mp4';
+
+    const animData = await parseSvga(uploadedPath);
+    const { params } = animData;
+
+    const framesDir = path.join(jobTempDir, 'frames');
+    const audioDir  = path.join(jobTempDir, 'audio');
+    fs.mkdirSync(framesDir, { recursive: true });
+    fs.mkdirSync(audioDir,  { recursive: true });
+
+    const audioFiles = await extractAudio(animData, audioDir);
+    const audioPath  = pickPrimaryAudio(audioFiles, params.frames);
+
+    // Use bundled background image if available
+    const backgroundImage = fs.existsSync(DEFAULT_BG_IMAGE) ? DEFAULT_BG_IMAGE : null;
+
+    await renderFrames(animData, framesDir, { backgroundImage, background: '#ffffff' });
+
+    const outputFileName = `${jobId}.${format}`;
+    const outputPath = path.join(OUTPUTS_DIR, outputFileName);
+
+    await encodeVideo({
+      framesDir,
+      fps: params.fps,
+      outputPath,
+      audioPath: audioPath || undefined,
+      format,
+    });
+
+    // Build absolute URL from the incoming request
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    return res.json({ url: `${baseUrl}/outputs/${outputFileName}` });
+
+  } catch (err) {
+    console.error(`[${jobId}] /mp4 error:`, err.message);
+    return res.status(500).json({ error: err.message });
+  } finally {
+    removeDir(jobTempDir);
+    if (uploadedPath) removeFile(uploadedPath);
+  }
+});
+
 module.exports = router;

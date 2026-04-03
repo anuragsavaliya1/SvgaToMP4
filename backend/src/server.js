@@ -58,7 +58,8 @@ scheduleOutputPurge(
 app.listen(PORT, () => {
   console.log(`SVGA Converter API listening on http://localhost:${PORT}`);
   console.log('Endpoints:');
-  console.log('  POST /api/svga/convert  — convert SVGA to MP4/WebM');
+  console.log('  POST /api/svga/mp4      — convert SVGA → { url } (Postman-friendly)');
+  console.log('  POST /api/svga/convert  — convert SVGA to MP4/WebM (full response)');
   console.log('  POST /api/svga/audio    — extract audio from SVGA');
   console.log('  GET  /health            — health check');
 });
