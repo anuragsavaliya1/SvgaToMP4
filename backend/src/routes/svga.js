@@ -59,6 +59,9 @@ router.post('/convert', upload.single('file'), async (req, res) => {
     const width = req.body.width ? parseInt(req.body.width, 10) : undefined;
     const height = req.body.height ? parseInt(req.body.height, 10) : undefined;
     const format = req.body.format === 'webm' ? 'webm' : 'mp4';
+    // background: caller can pass e.g. 'transparent', '#000000', '#ffffff'
+    // MP4 (yuv420p) has no alpha — default to white; WebM supports alpha so default transparent
+    const background = req.body.background || (format === 'mp4' ? '#ffffff' : 'transparent');
 
     console.log(`[${jobId}] Parsing SVGA…`);
     const animData = await parseSvga(uploadedPath);
@@ -81,8 +84,8 @@ router.post('/convert', upload.single('file'), async (req, res) => {
     console.log(`[${jobId}] Audio tracks found: ${audioFiles.length}`);
 
     // Render frames
-    console.log(`[${jobId}] Rendering ${params.frames} frames…`);
-    await renderFrames(animData, framesDir, { width, height });
+    console.log(`[${jobId}] Rendering ${params.frames} frames… (background: ${background})`);
+    await renderFrames(animData, framesDir, { width, height, background });
 
     // Encode video
     const outputFileName = `${jobId}.${format}`;

@@ -9,7 +9,8 @@ const path = require('path');
  *
  * @param {object} animData    - Parsed SVGA data from svgaParser.parseSvga()
  * @param {string} framesDir   - Directory where frame PNGs will be written
- * @param {object} [options]   - Optional overrides: { width, height }
+ * @param {object} [options]   - Optional overrides: { width, height, background }
+ *   background: CSS color string e.g. '#ffffff', 'transparent' (default: 'transparent')
  * @returns {string[]}         - Sorted list of absolute PNG file paths
  */
 async function renderFrames(animData, framesDir, options = {}) {
@@ -18,6 +19,7 @@ async function renderFrames(animData, framesDir, options = {}) {
   const width = options.width || Math.ceil(params.viewBoxWidth) || 480;
   const height = options.height || Math.ceil(params.viewBoxHeight) || 480;
   const totalFrames = params.frames;
+  const background = options.background || 'transparent';
 
   if (totalFrames === 0) {
     throw new Error('SVGA has 0 frames');
@@ -39,8 +41,13 @@ async function renderFrames(animData, framesDir, options = {}) {
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
 
-    // Transparent background
-    ctx.clearRect(0, 0, width, height);
+    // Fill background
+    if (background === 'transparent') {
+      ctx.clearRect(0, 0, width, height);
+    } else {
+      ctx.fillStyle = background;
+      ctx.fillRect(0, 0, width, height);
+    }
 
     for (const sprite of sprites) {
       const frameData = sprite.frames[frameIndex];
