@@ -7,56 +7,89 @@ const path = require('path');
 /**
  * Render all frames of an SVGA animation to PNG files.
  *
- * @param {object} animData    - Parsed SVGA data from svgaParser.parseSvga()
- * @param {string} framesDir   - Directory where frame PNGs will be written
- * @param {object} [options]   - Optional overrides: { width, height, background }
- *   background: CSS color string e.g. '#ffffff', 'transparent' (default: 'transparent')
- * @returns {string[]}         - Sorted list of absolute PNG file paths
+ * Layout when backgroundImage is provided:
+ *   - Canvas size = background image's natural size
+ *   - Background drawn 1:1 (no stretch)
+ *   - SVGA animation scaled to fit the bottom (1 - topReserved) portion,
+ *     centered horizontally  (topReserved default = 0.30 → 30% space above)
+ *
+ * @param {object} animData        - Parsed SVGA data from svgaParser.parseSvga()
+ * @param {string} framesDir       - Directory where frame PNGs will be written
+ * @param {object} [options]
+ *   backgroundImage  {string}   - Path to background PNG/JPG
+ *   topReserved      {number}   - Fraction of canvas height to keep clear above animation (0–1, default 0.30)
+ *   background       {string}   - Fallback CSS color when no backgroundImage
+ *   width / height   {number}   - Override canvas size (ignored when backgroundImage is set)
+ * @returns {string[]} Sorted list of absolute PNG file paths
  */
 async function renderFrames(animData, framesDir, options = {}) {
   const { params, sprites, imageBuffers } = animData;
 
-  const width = options.width || Math.ceil(params.viewBoxWidth) || 480;
-  const height = options.height || Math.ceil(params.viewBoxHeight) || 480;
   const totalFrames = params.frames;
   const background = options.background || 'transparent';
-  const backgroundImage = options.backgroundImage || null; // path or Buffer
+  const backgroundImage = options.backgroundImage || null;
+  const topReserved = options.topReserved != null ? options.topReserved : 0.30;
 
-  if (totalFrames === 0) {
-    throw new Error('SVGA has 0 frames');
-  }
+  if (totalFrames === 0) throw new Error('SVGA has 0 frames');
 
-  // Pre-load background image once (if provided)
+  // ── Load background image ─────────────────────────────────────────────────
   let bgImage = null;
+  let canvasW, canvasH;
+
   if (backgroundImage) {
     bgImage = await loadImage(backgroundImage);
+    // Canvas matches the background image exactly
+    canvasW = bgImage.width;
+    canvasH = bgImage.height;
+  } else {
+    canvasW = options.width  || Math.ceil(params.viewBoxWidth)  || 480;
+    canvasH = options.height || Math.ceil(params.viewBoxHeight) || 480;
   }
 
-  // Pre-load all sprite images into canvas Image objects
+  // ── Compute SVGA placement inside the bottom (1-topReserved) area ─────────
+  //   Available area for the animation:
+  const areaY = Math.round(canvasH * topReserved);   // top of the animation zone
+  const areaH = canvasH - areaY;                      // height of the animation zone
+  const areaW = canvasW;
+
+  const svgaW = params.viewBoxWidth  || canvasW;
+  const svgaH = params.viewBoxHeight || canvasH;
+
+  // Scale to fit inside the available area, preserving aspect ratio
+  const scale = Math.min(areaW / svgaW, areaH / svgaH);
+  const drawW = svgaW * scale;
+  const drawH = svgaH * scale;
+
+  // Center horizontally; align to bottom of the available area
+  const offsetX = (areaW - drawW) / 2;
+  const offsetY = areaY + (areaH - drawH);   // bottom-aligned within the zone
+
+  // ── Pre-load sprite images ────────────────────────────────────────────────
   const imageCache = {};
   for (const [key, buf] of Object.entries(imageBuffers)) {
-    try {
-      imageCache[key] = await loadImage(buf);
-    } catch {
-      // skip unreadable images
-    }
+    try { imageCache[key] = await loadImage(buf); } catch { /* skip */ }
   }
 
   const framePaths = [];
 
   for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
-    const canvas = createCanvas(width, height);
+    const canvas = createCanvas(canvasW, canvasH);
     const ctx = canvas.getContext('2d');
 
-    // Fill background image or color
+    // Draw background
     if (bgImage) {
-      ctx.drawImage(bgImage, 0, 0, width, height);
+      ctx.drawImage(bgImage, 0, 0, canvasW, canvasH);
     } else if (background === 'transparent') {
-      ctx.clearRect(0, 0, width, height);
+      ctx.clearRect(0, 0, canvasW, canvasH);
     } else {
       ctx.fillStyle = background;
-      ctx.fillRect(0, 0, width, height);
+      ctx.fillRect(0, 0, canvasW, canvasH);
     }
+
+    // Push SVGA coordinate space: translate to animation zone, then scale
+    ctx.save();
+    ctx.translate(offsetX, offsetY);
+    ctx.scale(scale, scale);
 
     for (const sprite of sprites) {
       const frameData = sprite.frames[frameIndex];
@@ -65,33 +98,22 @@ async function renderFrames(animData, framesDir, options = {}) {
       const { layout, transform, alpha, shapes } = frameData;
 
       ctx.save();
-
-      // Apply global alpha
       ctx.globalAlpha = clamp(alpha, 0, 1);
-
-      // Apply affine transform
-      // SVGA transform matrix: [a c tx; b d ty; 0 0 1]
-      ctx.transform(
-        transform.a,
-        transform.b,
-        transform.c,
-        transform.d,
-        transform.tx,
-        transform.ty
-      );
+      ctx.transform(transform.a, transform.b, transform.c, transform.d, transform.tx, transform.ty);
 
       const img = imageCache[sprite.imageKey];
       if (img) {
         ctx.drawImage(img, layout.x, layout.y, layout.width || img.width, layout.height || img.height);
       }
 
-      // Draw vector shapes if present
       if (shapes && shapes.length > 0) {
         drawShapes(ctx, shapes);
       }
 
       ctx.restore();
     }
+
+    ctx.restore(); // pop SVGA coordinate space
 
     const framePath = path.join(framesDir, `frame_${String(frameIndex).padStart(6, '0')}.png`);
     await saveCanvasToPng(canvas, framePath);
