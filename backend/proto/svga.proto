@@ -31,11 +31,11 @@ message SpriteEntity {
 }
 
 message FrameEntity {
-    FrameLayout layout = 1;
-    Transform transform = 2;
-    bool hidden = 3;
-    repeated ShapeEntity shapes = 4;
-    float alpha = 5;
+    float alpha = 1;
+    FrameLayout layout = 2;
+    Transform transform = 3;
+    bool hidden = 4;
+    repeated ShapeEntity shapes = 5;
 }
 
 message FrameLayout {

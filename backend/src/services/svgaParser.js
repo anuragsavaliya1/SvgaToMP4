@@ -2,6 +2,7 @@
 
 const AdmZip = require('adm-zip');
 const protobuf = require('protobufjs');
+const zlib = require('zlib');
 const path = require('path');
 const fs = require('fs');
 
@@ -9,6 +10,11 @@ const PROTO_PATH = path.join(__dirname, '../../proto/svga.proto');
 
 // Supported audio file extensions inside SVGA archives
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.aac', '.m4a'];
+
+// ZIP magic bytes: PK\x03\x04
+const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+// zlib magic bytes: 0x78 followed by 0x01 / 0x9c / 0xda / 0x5e
+const ZLIB_MAGIC = 0x78;
 
 let _MovieEntity = null;
 
@@ -20,61 +26,79 @@ async function getMovieEntity() {
 }
 
 /**
+ * Detect whether the file is a ZIP, zlib-compressed blob, or raw protobuf.
+ */
+function detectFormat(buf) {
+  if (buf[0] === ZIP_MAGIC[0] && buf[1] === ZIP_MAGIC[1]) return 'zip';
+  if (buf[0] === ZLIB_MAGIC) return 'zlib';
+  return 'proto'; // raw protobuf fallback
+}
+
+/**
  * Parse an SVGA file and return structured animation data.
+ * Supports SVGA v1 (zlib-compressed protobuf) and v2 (ZIP archive).
  * @param {string} svgaFilePath - Absolute path to the .svga file
  * @returns {object} Parsed animation data including params, sprites, images, audios
  */
 async function parseSvga(svgaFilePath) {
   const MovieEntity = await getMovieEntity();
 
-  const zip = new AdmZip(svgaFilePath);
-  const entries = zip.getEntries();
+  const rawBuf = fs.readFileSync(svgaFilePath);
+  const format = detectFormat(rawBuf);
+  console.log(`[svgaParser] detected format: ${format}`);
 
-  // Find movie.spec (protobuf binary)
-  const specEntry = entries.find(
-    (e) => e.entryName === 'movie.spec' || e.entryName.endsWith('/movie.spec')
-  );
-  if (!specEntry) {
-    throw new Error('Invalid SVGA file: missing movie.spec');
-  }
-
-  const specBuffer = specEntry.getData();
-  const movie = MovieEntity.decode(specBuffer);
-
-  // Extract sprite images from the zip (keyed by imageKey)
-  // SVGA v2 embeds images inside the protobuf images map; v1 stores them as separate zip entries.
+  let movie;
   const imageBuffers = {};
+  const audioBuffers = {};
 
-  // Protobuf images map (v2)
-  if (movie.images && Object.keys(movie.images).length > 0) {
-    for (const [key, bytes] of Object.entries(movie.images)) {
-      imageBuffers[key] = Buffer.from(bytes);
-    }
-  }
+  if (format === 'zip') {
+    // ── SVGA v2: ZIP archive ──────────────────────────────────────────────
+    const zip = new AdmZip(svgaFilePath);
+    const entries = zip.getEntries();
 
-  // Zip entry images (v1 fallback / supplemental)
-  for (const entry of entries) {
-    if (entry.entryName === 'movie.spec') continue;
-    const ext = path.extname(entry.entryName).toLowerCase();
-    if (['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) {
-      const key = path.basename(entry.entryName, ext);
-      if (!imageBuffers[key]) {
-        imageBuffers[key] = entry.getData();
+    const specEntry = entries.find(
+      (e) => e.entryName === 'movie.spec' || e.entryName.endsWith('/movie.spec')
+    );
+    if (!specEntry) throw new Error('Invalid SVGA ZIP: missing movie.spec');
+
+    movie = MovieEntity.decode(specEntry.getData());
+
+    // Images embedded in protobuf map
+    if (movie.images && Object.keys(movie.images).length > 0) {
+      for (const [key, bytes] of Object.entries(movie.images)) {
+        imageBuffers[key] = Buffer.from(bytes);
       }
     }
-  }
 
-  // Extract audio files from zip entries
-  const audioBuffers = {};
-  for (const entry of entries) {
-    const ext = path.extname(entry.entryName).toLowerCase();
-    if (AUDIO_EXTENSIONS.includes(ext)) {
-      const key = path.basename(entry.entryName, ext);
-      audioBuffers[key] = {
-        data: entry.getData(),
-        ext: ext,
-        entryName: entry.entryName,
-      };
+    // Images stored as separate zip entries
+    for (const entry of entries) {
+      if (entry.entryName === 'movie.spec') continue;
+      const ext = path.extname(entry.entryName).toLowerCase();
+      if (['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) {
+        const key = path.basename(entry.entryName, ext);
+        if (!imageBuffers[key]) imageBuffers[key] = entry.getData();
+      }
+      if (AUDIO_EXTENSIONS.includes(ext)) {
+        const key = path.basename(entry.entryName, ext);
+        audioBuffers[key] = { data: entry.getData(), ext, entryName: entry.entryName };
+      }
+    }
+  } else {
+    // ── SVGA v1: zlib-compressed protobuf (or raw protobuf) ───────────────
+    let protoBuf;
+    if (format === 'zlib') {
+      protoBuf = zlib.inflateSync(rawBuf);
+    } else {
+      protoBuf = rawBuf;
+    }
+
+    movie = MovieEntity.decode(protoBuf);
+
+    // v1 stores all images inside the protobuf images map
+    if (movie.images && Object.keys(movie.images).length > 0) {
+      for (const [key, bytes] of Object.entries(movie.images)) {
+        imageBuffers[key] = Buffer.from(bytes);
+      }
     }
   }
 
