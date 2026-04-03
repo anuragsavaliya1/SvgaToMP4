@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+message MovieEntity {
+    string version = 1;
+    MovieParams params = 2;
+    map<string, bytes> images = 3;
+    repeated SpriteEntity sprites = 4;
+    string fileName = 5;
+    repeated AudioEntity audios = 6;
+}
+
+message MovieParams {
+    float viewBoxWidth = 1;
+    float viewBoxHeight = 2;
+    int32 fps = 3;
+    int32 frames = 4;
+}
+
+message AudioEntity {
+    string audioKey = 1;
+    int32 startFrame = 2;
+    int32 endFrame = 3;
+    int32 startTime = 4;
+    int32 totalTime = 5;
+}
+
+message SpriteEntity {
+    string imageKey = 1;
+    repeated FrameEntity frames = 2;
+    string matteKey = 3;
+}
+
+message FrameEntity {
+    float alpha = 1;
+    FrameLayout layout = 2;
+    Transform transform = 3;
+    bool hidden = 4;
+    repeated ShapeEntity shapes = 5;
+}
+
+message FrameLayout {
+    float x = 1;
+    float y = 2;
+    float width = 3;
+    float height = 4;
+}
+
+message Transform {
+    float a = 1;
+    float b = 2;
+    float c = 3;
+    float d = 4;
+    float tx = 5;
+    float ty = 6;
+}
+
+message ShapeEntity {
+    enum ShapeType {
+        Shape = 0;
+        Rect = 1;
+        Ellipse = 2;
+        Keep = 3;
+    }
+    ShapeType type = 1;
+    ShapeStyle styles = 2;
+    Transform transform = 3;
+    ShapeArgs args = 4;
+    RectArgs rectArgs = 5;
+    EllipseArgs ellipseArgs = 6;
+}
+
+message ShapeStyle {
+    RGBAObject fill = 1;
+    RGBAObject stroke = 2;
+    float strokeWidth = 3;
+    string lineCap = 4;
+    string lineJoin = 5;
+    float miterLimit = 6;
+    repeated float lineDash = 7;
+    float lineDashOffset = 8;
+}
+
+message RGBAObject {
+    float r = 1;
+    float g = 2;
+    float b = 3;
+    float a = 4;
+}
+
+message ShapeArgs {
+    string d = 1;
+}
+
+message RectArgs {
+    float x = 1;
+    float y = 2;
+    float width = 3;
+    float height = 4;
+    float cornerRadius = 5;
+}
+
+message EllipseArgs {
+    float x = 1;
+    float y = 2;
+    float radiusX = 3;
+    float radiusY = 4;
+}
