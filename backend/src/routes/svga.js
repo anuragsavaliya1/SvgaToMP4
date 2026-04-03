@@ -8,6 +8,7 @@ const { v4: uuidv4 } = require('uuid');
 
 const { parseSvga } = require('../services/svgaParser');
 const { renderFrames } = require('../services/frameRenderer');
+const { parseWebp, renderWebpFrames } = require('../services/webpParser');
 const { extractAudio, pickPrimaryAudio } = require('../services/audioExtractor');
 const { encodeVideo } = require('../services/videoEncoder');
 const { removeDir, removeFile } = require('../utils/cleanup');
@@ -29,9 +30,10 @@ const upload = multer({
   fileFilter(_req, file, cb) {
     const ext = path.extname(file.originalname).toLowerCase();
     if (
-      ext === '.svga' ||
-      ext === '.png' || ext === '.jpg' || ext === '.jpeg' ||
-      file.mimetype === 'application/octet-stream'
+      ext === '.svga' || ext === '.webp' ||
+      ext === '.png'  || ext === '.jpg' || ext === '.jpeg' ||
+      file.mimetype === 'application/octet-stream' ||
+      file.mimetype === 'image/webp'
     ) {
       cb(null, true);
     } else {
@@ -233,35 +235,43 @@ router.post('/mp4', upload.single('file'), async (req, res) => {
 
     uploadedPath = req.file.path;
     const format = req.body.format === 'webm' ? 'webm' : 'mp4';
+    const ext    = path.extname(req.file.originalname).toLowerCase();
+    const isWebp = ext === '.webp';
 
-    const animData = await parseSvga(uploadedPath);
-    const { params } = animData;
-
-    const framesDir = path.join(jobTempDir, 'frames');
-    const audioDir  = path.join(jobTempDir, 'audio');
-    fs.mkdirSync(framesDir, { recursive: true });
-    fs.mkdirSync(audioDir,  { recursive: true });
-
-    const audioFiles = await extractAudio(animData, audioDir);
-    const audioPath  = pickPrimaryAudio(audioFiles, params.frames);
-
-    // Use bundled background image if available
     const backgroundImage = fs.existsSync(DEFAULT_BG_IMAGE) ? DEFAULT_BG_IMAGE : null;
+    const framesDir = path.join(jobTempDir, 'frames');
+    fs.mkdirSync(framesDir, { recursive: true });
 
-    await renderFrames(animData, framesDir, { backgroundImage, background: '#ffffff' });
+    let fps, audioPath;
+
+    if (isWebp) {
+      // ── Animated WebP flow ──────────────────────────────────────────────
+      const rawFramesDir = path.join(jobTempDir, 'raw_frames');
+      const parsed = await parseWebp(uploadedPath, rawFramesDir);
+      fps = parsed.meta.fps;
+
+      await renderWebpFrames(parsed, framesDir, { backgroundImage, background: '#ffffff' });
+      audioPath = undefined; // WebP has no audio
+
+    } else {
+      // ── SVGA flow ───────────────────────────────────────────────────────
+      const audioDir = path.join(jobTempDir, 'audio');
+      fs.mkdirSync(audioDir, { recursive: true });
+
+      const animData  = await parseSvga(uploadedPath);
+      fps = animData.params.fps;
+
+      const audioFiles = await extractAudio(animData, audioDir);
+      audioPath = pickPrimaryAudio(audioFiles, animData.params.frames);
+
+      await renderFrames(animData, framesDir, { backgroundImage, background: '#ffffff' });
+    }
 
     const outputFileName = `${jobId}.${format}`;
     const outputPath = path.join(OUTPUTS_DIR, outputFileName);
 
-    await encodeVideo({
-      framesDir,
-      fps: params.fps,
-      outputPath,
-      audioPath: audioPath || undefined,
-      format,
-    });
+    await encodeVideo({ framesDir, fps, outputPath, audioPath, format });
 
-    // Build absolute URL from the incoming request
     const baseUrl = `${req.protocol}://${req.get('host')}`;
     return res.json({ url: `${baseUrl}/outputs/${outputFileName}` });
 
