@@ -246,8 +246,7 @@ router.post('/mp4', upload.single('file'), async (req, res) => {
 
     if (isWebp) {
       // ── Animated WebP flow ──────────────────────────────────────────────
-      const rawFramesDir = path.join(jobTempDir, 'raw_frames');
-      const parsed = await parseWebp(uploadedPath, rawFramesDir);
+      const parsed = await parseWebp(uploadedPath);
       fps = parsed.meta.fps;
 
       await renderWebpFrames(parsed, framesDir, { backgroundImage, background: '#ffffff' });

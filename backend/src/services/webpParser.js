@@ -1,102 +1,62 @@
 'use strict';
 
-const ffmpeg = require('fluent-ffmpeg');
+const sharp = require('sharp');
 const { createCanvas, loadImage } = require('canvas');
 const path = require('path');
 const fs = require('fs');
 
 /**
- * Extract metadata (fps, frameCount, width, height) from an animated WebP.
- */
-function probeWebp(filePath) {
-  return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(filePath, (err, meta) => {
-      if (err) return reject(err);
-      const stream = (meta.streams || []).find(s => s.codec_type === 'video');
-      if (!stream) return reject(new Error('No video stream found in WebP'));
-
-      // fps: r_frame_rate is a fraction string like "10/1"
-      let fps = 10;
-      if (stream.r_frame_rate) {
-        const [num, den] = stream.r_frame_rate.split('/').map(Number);
-        if (den && den > 0) fps = num / den;
-      }
-      // avg_frame_rate is more reliable for animated WebP
-      if (stream.avg_frame_rate) {
-        const [num, den] = stream.avg_frame_rate.split('/').map(Number);
-        if (den && den > 0 && num > 0) fps = num / den;
-      }
-
-      const frameCount = stream.nb_frames
-        ? parseInt(stream.nb_frames, 10)
-        : Math.round((meta.format.duration || 1) * fps);
-
-      resolve({
-        width:  stream.width  || 0,
-        height: stream.height || 0,
-        fps:    Math.round(fps) || 10,
-        frames: frameCount || 1,
-      });
-    });
-  });
-}
-
-/**
- * Extract all frames from an animated WebP to individual PNGs.
- * Returns array of absolute PNG file paths (sorted).
- */
-function extractFrames(filePath, framesDir) {
-  return new Promise((resolve, reject) => {
-    const pattern = path.join(framesDir, 'raw_%06d.png');
-    ffmpeg(filePath)
-      .outputOptions(['-vsync 0'])
-      .output(pattern)
-      .on('end', () => {
-        const files = fs.readdirSync(framesDir)
-          .filter(f => f.startsWith('raw_') && f.endsWith('.png'))
-          .sort()
-          .map(f => path.join(framesDir, f));
-        resolve(files);
-      })
-      .on('error', reject)
-      .run();
-  });
-}
-
-/**
- * Parse an animated WebP file and return the same animData shape as svgaParser,
- * so the existing frameRenderer and videoEncoder can be reused.
+ * Parse an animated WebP: read metadata and extract all frames as PNG buffers.
  *
  * @param {string} webpFilePath
- * @param {string} rawFramesDir  - temp dir to extract raw WebP frames into
- * @returns {object} animData compatible with renderWebpFrames()
+ * @returns {object} { meta: { width, height, fps, frames }, frameBuffers: Buffer[] }
  */
-async function parseWebp(webpFilePath, rawFramesDir) {
-  fs.mkdirSync(rawFramesDir, { recursive: true });
+async function parseWebp(webpFilePath) {
+  const meta = await sharp(webpFilePath, { animated: true }).metadata();
 
-  const meta = await probeWebp(webpFilePath);
-  console.log(`[webpParser] ${meta.width}x${meta.height} fps=${meta.fps} frames=${meta.frames}`);
+  if (!meta.pages || meta.pages < 1) {
+    throw new Error('Not an animated WebP or no frames found');
+  }
 
-  const rawFramePaths = await extractFrames(webpFilePath, rawFramesDir);
-  // Use actual count from extracted files (more reliable than probe for WebP)
-  meta.frames = rawFramePaths.length || meta.frames;
+  const frameW = meta.width;
+  // sharp stacks all pages vertically: total height = frameH * pages
+  const frameH = Math.round(meta.height / meta.pages);
 
-  return { meta, rawFramePaths };
+  // Per-frame delay (ms). Use average to derive fps.
+  const delays = meta.delay && meta.delay.length > 0 ? meta.delay : [100];
+  const avgDelay = delays.reduce((a, b) => a + b, 0) / delays.length;
+  const fps = Math.round(1000 / avgDelay) || 10;
+
+  console.log(`[webpParser] ${frameW}x${frameH} fps=${fps} frames=${meta.pages}`);
+
+  // Extract each frame as a raw PNG buffer
+  const frameBuffers = [];
+  for (let i = 0; i < meta.pages; i++) {
+    const buf = await sharp(webpFilePath, { animated: true, page: i })
+      .png()
+      .toBuffer();
+    frameBuffers.push(buf);
+  }
+
+  return {
+    meta: { width: frameW, height: frameH, fps, frames: meta.pages },
+    frameBuffers,
+  };
 }
 
 /**
- * Render WebP frames composited on top of a background image,
- * placing the animation in the bottom (1-topReserved) portion.
+ * Render WebP frames composited on a background image and save as PNGs.
+ * Same layout as SVGA: animation placed in bottom (1-topReserved) of canvas.
  *
- * @param {object} parsed         - result of parseWebp()
- * @param {string} outFramesDir   - where to write composited PNGs
- * @param {object} options        - { backgroundImage, topReserved, background }
- * @returns {string[]} sorted composited frame paths
+ * @param {object} parsed       - result of parseWebp()
+ * @param {string} outFramesDir - directory to write composited frame PNGs
+ * @param {object} options      - { backgroundImage, topReserved, background }
+ * @returns {string[]} sorted composited frame file paths
  */
 async function renderWebpFrames(parsed, outFramesDir, options = {}) {
-  const { meta, rawFramePaths } = parsed;
+  const { meta, frameBuffers } = parsed;
   const topReserved = options.topReserved != null ? options.topReserved : 0.30;
-  const background  = options.background  || '#ffffff';
+  const background  = options.background || '#ffffff';
 
   fs.mkdirSync(outFramesDir, { recursive: true });
 
@@ -105,28 +65,26 @@ async function renderWebpFrames(parsed, outFramesDir, options = {}) {
   let canvasW, canvasH;
 
   if (options.backgroundImage && fs.existsSync(options.backgroundImage)) {
-    bgImage  = await loadImage(options.backgroundImage);
-    canvasW  = bgImage.width;
-    canvasH  = bgImage.height;
+    bgImage = await loadImage(options.backgroundImage);
+    canvasW = bgImage.width;
+    canvasH = bgImage.height;
   } else {
-    canvasW  = meta.width  || 480;
-    canvasH  = meta.height || 480;
+    canvasW = meta.width;
+    canvasH = meta.height;
   }
 
-  // Animation placement: bottom (1 - topReserved) of canvas
-  const areaY = Math.round(canvasH * topReserved);
-  const areaH = canvasH - areaY;
-  const areaW = canvasW;
-
-  const scale  = Math.min(areaW / meta.width, areaH / meta.height);
-  const drawW  = meta.width  * scale;
-  const drawH  = meta.height * scale;
-  const offsetX = (areaW - drawW) / 2;
-  const offsetY = areaY + (areaH - drawH);  // bottom-aligned
+  // Animation zone: bottom (1 - topReserved) of canvas
+  const areaY   = Math.round(canvasH * topReserved);
+  const areaH   = canvasH - areaY;
+  const scale   = Math.min(canvasW / meta.width, areaH / meta.height);
+  const drawW   = meta.width  * scale;
+  const drawH   = meta.height * scale;
+  const offsetX = (canvasW - drawW) / 2;
+  const offsetY = areaY + (areaH - drawH); // bottom-aligned
 
   const framePaths = [];
 
-  for (let i = 0; i < rawFramePaths.length; i++) {
+  for (let i = 0; i < frameBuffers.length; i++) {
     const canvas = createCanvas(canvasW, canvasH);
     const ctx    = canvas.getContext('2d');
 
@@ -139,7 +97,7 @@ async function renderWebpFrames(parsed, outFramesDir, options = {}) {
     }
 
     // WebP frame
-    const frame = await loadImage(rawFramePaths[i]);
+    const frame = await loadImage(frameBuffers[i]);
     ctx.drawImage(frame, offsetX, offsetY, drawW, drawH);
 
     const outPath = path.join(outFramesDir, `frame_${String(i).padStart(6, '0')}.png`);
