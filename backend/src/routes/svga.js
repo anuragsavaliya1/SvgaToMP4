@@ -19,13 +19,20 @@ const UPLOADS_DIR = path.join(__dirname, '../../uploads');
 const OUTPUTS_DIR = path.join(__dirname, '../../outputs');
 const TEMP_DIR = path.join(__dirname, '../../temp');
 
-// Multer: store uploaded SVGA on disk
+// Default background image path (bundled in repo)
+const DEFAULT_BG_IMAGE = path.join(__dirname, '../../Frame_1000004515.png');
+
+// Multer: accept both svga file and optional background image
 const upload = multer({
   dest: UPLOADS_DIR,
   limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB
   fileFilter(_req, file, cb) {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (ext === '.svga' || file.mimetype === 'application/octet-stream') {
+    if (
+      ext === '.svga' ||
+      ext === '.png' || ext === '.jpg' || ext === '.jpeg' ||
+      file.mimetype === 'application/octet-stream'
+    ) {
       cb(null, true);
     } else {
       cb(new Error('Only .svga files are accepted'));
@@ -36,31 +43,44 @@ const upload = multer({
 // ─── POST /api/svga/convert ──────────────────────────────────────────────────
 //
 // Body (multipart/form-data):
-//   file    - the .svga file
-//   width   - (optional) output width  in px
-//   height  - (optional) output height in px
-//   format  - (optional) 'mp4' (default) | 'webm'
+//   file            - the .svga file
+//   backgroundImage - (optional) PNG/JPG to use as background (falls back to bundled default)
+//   width           - (optional) output width  in px
+//   height          - (optional) output height in px
+//   format          - (optional) 'mp4' (default) | 'webm'
+//   background      - (optional) CSS color fallback when no image provided
 //
 // Response:
 //   { success, jobId, downloadUrl, format, fps, frames, width, height, hasAudio }
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/convert', upload.single('file'), async (req, res) => {
+router.post('/convert', upload.fields([{ name: 'file', maxCount: 1 }, { name: 'backgroundImage', maxCount: 1 }]), async (req, res) => {
   const jobId = uuidv4();
   const jobTempDir = path.join(TEMP_DIR, jobId);
   let uploadedPath = null;
+  let uploadedBgPath = null;
 
   try {
-    if (!req.file) {
+    const svgaFile = req.files && req.files['file'] && req.files['file'][0];
+    if (!svgaFile) {
       return res.status(400).json({ success: false, error: 'No file uploaded' });
     }
 
-    uploadedPath = req.file.path;
+    uploadedPath = svgaFile.path;
+
+    // Background image: uploaded file > bundled default > color fallback
+    const bgFile = req.files && req.files['backgroundImage'] && req.files['backgroundImage'][0];
+    uploadedBgPath = bgFile ? bgFile.path : null;
+
+    let backgroundImage = null;
+    if (uploadedBgPath) {
+      backgroundImage = uploadedBgPath;
+    } else if (fs.existsSync(DEFAULT_BG_IMAGE)) {
+      backgroundImage = DEFAULT_BG_IMAGE;
+    }
 
     const width = req.body.width ? parseInt(req.body.width, 10) : undefined;
     const height = req.body.height ? parseInt(req.body.height, 10) : undefined;
     const format = req.body.format === 'webm' ? 'webm' : 'mp4';
-    // background: caller can pass e.g. 'transparent', '#000000', '#ffffff'
-    // MP4 (yuv420p) has no alpha — default to white; WebM supports alpha so default transparent
     const background = req.body.background || (format === 'mp4' ? '#ffffff' : 'transparent');
 
     console.log(`[${jobId}] Parsing SVGA…`);
@@ -84,8 +104,8 @@ router.post('/convert', upload.single('file'), async (req, res) => {
     console.log(`[${jobId}] Audio tracks found: ${audioFiles.length}`);
 
     // Render frames
-    console.log(`[${jobId}] Rendering ${params.frames} frames… (background: ${background})`);
-    await renderFrames(animData, framesDir, { width, height, background });
+    console.log(`[${jobId}] Rendering ${params.frames} frames… (bg: ${backgroundImage || background})`);
+    await renderFrames(animData, framesDir, { width, height, background, backgroundImage });
 
     // Encode video
     const outputFileName = `${jobId}.${format}`;
@@ -125,6 +145,7 @@ router.post('/convert', upload.single('file'), async (req, res) => {
     // Clean up temp frames & audio (keep the output file)
     removeDir(jobTempDir);
     if (uploadedPath) removeFile(uploadedPath);
+    if (uploadedBgPath) removeFile(uploadedBgPath);
   }
 });
 

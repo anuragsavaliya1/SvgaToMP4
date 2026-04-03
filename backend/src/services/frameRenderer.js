@@ -20,9 +20,16 @@ async function renderFrames(animData, framesDir, options = {}) {
   const height = options.height || Math.ceil(params.viewBoxHeight) || 480;
   const totalFrames = params.frames;
   const background = options.background || 'transparent';
+  const backgroundImage = options.backgroundImage || null; // path or Buffer
 
   if (totalFrames === 0) {
     throw new Error('SVGA has 0 frames');
+  }
+
+  // Pre-load background image once (if provided)
+  let bgImage = null;
+  if (backgroundImage) {
+    bgImage = await loadImage(backgroundImage);
   }
 
   // Pre-load all sprite images into canvas Image objects
@@ -41,8 +48,10 @@ async function renderFrames(animData, framesDir, options = {}) {
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
 
-    // Fill background
-    if (background === 'transparent') {
+    // Fill background image or color
+    if (bgImage) {
+      ctx.drawImage(bgImage, 0, 0, width, height);
+    } else if (background === 'transparent') {
       ctx.clearRect(0, 0, width, height);
     } else {
       ctx.fillStyle = background;
