@@ -11,6 +11,24 @@ const PROTO_PATH = path.join(__dirname, '../../proto/svga.proto');
 // Supported audio file extensions inside SVGA archives
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.aac', '.m4a'];
 
+/**
+ * Detect audio format from magic bytes. Returns extension or null.
+ */
+function detectAudioExtension(buf) {
+  if (!buf || buf.length < 4) return null;
+  // MP3 with ID3 tag
+  if (buf[0] === 0x49 && buf[1] === 0x44 && buf[2] === 0x33) return '.mp3';
+  // MP3 sync word
+  if (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) return '.mp3';
+  // OGG
+  if (buf[0] === 0x4f && buf[1] === 0x67 && buf[2] === 0x67 && buf[3] === 0x53) return '.ogg';
+  // WAV RIFF
+  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46) return '.wav';
+  // AAC ADTS
+  if (buf[0] === 0xff && (buf[1] & 0xf0) === 0xf0) return '.aac';
+  return null;
+}
+
 // ZIP magic bytes: PK\x03\x04
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 // zlib magic bytes: 0x78 followed by 0x01 / 0x9c / 0xda / 0x5e
@@ -63,10 +81,16 @@ async function parseSvga(svgaFilePath) {
 
     movie = MovieEntity.decode(specEntry.getData());
 
-    // Images embedded in protobuf map
+    // Images (and possibly audio) embedded in protobuf map
     if (movie.images && Object.keys(movie.images).length > 0) {
       for (const [key, bytes] of Object.entries(movie.images)) {
-        imageBuffers[key] = Buffer.from(bytes);
+        const buf = Buffer.from(bytes);
+        const ext = detectAudioExtension(buf);
+        if (ext || key.toLowerCase().startsWith('audio')) {
+          audioBuffers[key] = { data: buf, ext: ext || '.mp3', entryName: key };
+        } else {
+          imageBuffers[key] = buf;
+        }
       }
     }
 
@@ -94,10 +118,21 @@ async function parseSvga(svgaFilePath) {
 
     movie = MovieEntity.decode(protoBuf);
 
-    // v1 stores all images inside the protobuf images map
+    // v1 stores images AND audio inside the protobuf images map.
+    // Audio entries have keys starting with "audio" or whose content starts with ID3/MP3 magic.
     if (movie.images && Object.keys(movie.images).length > 0) {
       for (const [key, bytes] of Object.entries(movie.images)) {
-        imageBuffers[key] = Buffer.from(bytes);
+        const buf = Buffer.from(bytes);
+        const ext = detectAudioExtension(buf);
+        if (ext || key.toLowerCase().startsWith('audio')) {
+          audioBuffers[key] = {
+            data: buf,
+            ext: ext || '.mp3',
+            entryName: key,
+          };
+        } else {
+          imageBuffers[key] = buf;
+        }
       }
     }
   }
