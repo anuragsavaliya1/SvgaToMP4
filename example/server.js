@@ -34,9 +34,9 @@ app.use('/outputs', express.static(OUTPUT_DIR));
 //
 const giftRouter = createExpressRouter({
   outputDir: OUTPUT_DIR,
-  // backgroundImage: path.join(__dirname, 'your-background.png'),  // uncomment + set your own image
+  backgroundImage: path.join(__dirname, 'BACKGROUND.png'),  // uncomment + set your own image
   topReserved: 0.30,
-  background:  '#ffffff',
+  //background:  '#ffffff',
 });
 
 app.use('/api/gifts', giftRouter);
