@@ -9,6 +9,6 @@
   },
   "dependencies": {
     "express": "^4.18.2",
-    "svga-gift-converter": "github:anuragsavaliya1/SvgaParserDemo#claude/check-db-connection-S7Cus"
+    "svga-gift-converter": "github:anuragsavaliya1/SvgaToMP4"
   }
 }
