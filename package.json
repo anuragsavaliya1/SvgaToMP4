@@ -1,0 +1,26 @@
+{
+  "name": "svga-gift-converter",
+  "version": "1.0.0",
+  "description": "Convert SVGA and animated WebP gift animations to MP4 video with background image compositing",
+  "main": "backend/index.js",
+  "scripts": {
+    "start": "node backend/server.js"
+  },
+  "keywords": ["svga", "webp", "mp4", "animation", "converter", "ffmpeg", "gift"],
+  "author": "",
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "adm-zip": "^0.5.10",
+    "canvas": "^3.2.3",
+    "express": "^4.18.2",
+    "fluent-ffmpeg": "^2.1.2",
+    "multer": "^1.4.5-lts.1",
+    "node-cron": "^3.0.3",
+    "protobufjs": "^7.2.5",
+    "sharp": "^0.34.5",
+    "uuid": "^9.0.0"
+  },
+  "peerDependencies": { "express": "^4.x" },
+  "peerDependenciesMeta": { "express": { "optional": true } }
+}
