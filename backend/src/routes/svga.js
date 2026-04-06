@@ -21,7 +21,7 @@ const OUTPUTS_DIR = path.join(__dirname, '../../outputs');
 const TEMP_DIR = path.join(__dirname, '../../temp');
 
 // Default background image path (bundled in repo)
-const DEFAULT_BG_IMAGE = path.join(__dirname, '../../Frame_1000004515.png');
+const DEFAULT_BG_IMAGE = path.join(__dirname, '../../BACKGROUND.png');
 
 // Multer: accept both svga file and optional background image
 const upload = multer({

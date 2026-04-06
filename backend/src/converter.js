@@ -11,6 +11,8 @@ const { parseWebp, renderWebpFrames }   = require('./services/webpParser');
 const { encodeVideo }          = require('./services/videoEncoder');
 const { removeDir, removeFile } = require('./utils/cleanup');
 
+const DEFAULT_BG_IMAGE = path.join(__dirname, '../../example/BACKGROUND.png');
+
 /**
  * Convert an SVGA or animated WebP file to MP4.
  *
@@ -38,6 +40,7 @@ async function convert(inputPath, options = {}) {
 async function _convertSvga(inputPath, options) {
   const { outputDir, outputFileName, backgroundImage, background = '#ffffff',
           topReserved, format = 'mp4', width, height } = options;
+  const resolvedBackgroundImage = backgroundImage || (fs.existsSync(DEFAULT_BG_IMAGE) ? DEFAULT_BG_IMAGE : undefined);
 
   const jobId     = uuidv4();
   const tmpDir    = path.join(require('os').tmpdir(), `svga-gift-${jobId}`);
@@ -51,7 +54,13 @@ async function _convertSvga(inputPath, options) {
     const audioFiles = await extractAudio(animData, audioDir);
     const audioPath  = pickPrimaryAudio(audioFiles, animData.params.frames);
 
-    await renderFrames(animData, framesDir, { width, height, backgroundImage, background, topReserved });
+    await renderFrames(animData, framesDir, {
+      width,
+      height,
+      backgroundImage: resolvedBackgroundImage,
+      background,
+      topReserved,
+    });
 
     return await _encode({ jobId, framesDir, fps: animData.params.fps, audioPath, format, outputDir, outputFileName });
   } finally {
@@ -62,6 +71,7 @@ async function _convertSvga(inputPath, options) {
 async function _convertWebp(inputPath, options) {
   const { outputDir, outputFileName, backgroundImage, background = '#ffffff',
           topReserved, format = 'mp4' } = options;
+  const resolvedBackgroundImage = backgroundImage || (fs.existsSync(DEFAULT_BG_IMAGE) ? DEFAULT_BG_IMAGE : undefined);
 
   const jobId     = uuidv4();
   const tmpDir    = path.join(require('os').tmpdir(), `svga-gift-${jobId}`);
@@ -70,7 +80,11 @@ async function _convertWebp(inputPath, options) {
 
   try {
     const parsed = await parseWebp(inputPath);
-    await renderWebpFrames(parsed, framesDir, { backgroundImage, background, topReserved });
+    await renderWebpFrames(parsed, framesDir, {
+      backgroundImage: resolvedBackgroundImage,
+      background,
+      topReserved,
+    });
 
     return await _encode({ jobId, framesDir, fps: parsed.meta.fps, audioPath: undefined, format, outputDir, outputFileName });
   } finally {
