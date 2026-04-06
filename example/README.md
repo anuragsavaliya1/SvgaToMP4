@@ -63,7 +63,7 @@ Output is saved to `example/outputs/`.
 
 ### Install from GitHub
 ```bash
-npm install github:anuragsavaliya1/SvgaParserDemo#claude/check-db-connection-S7Cus
+npm install github:anuragsavaliya1/SvgaToMP4
 ```
 
 ### Programmatic API
