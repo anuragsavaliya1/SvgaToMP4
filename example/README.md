@@ -61,9 +61,9 @@ Output is saved to `example/outputs/`.
 
 ## Using in your own code
 
-### Install (after publishing to npm)
+### Install from GitHub
 ```bash
-npm install svga-gift-converter
+npm install github:anuragsavaliya1/SvgaParserDemo#claude/check-db-connection-S7Cus
 ```
 
 ### Programmatic API
