@@ -1,12 +1,28 @@
 {
-  "name": "svga-converter-backend",
+  "name": "svga-gift-converter",
   "version": "1.0.0",
-  "description": "SVGA to MP4/WebM converter - pure Node.js backend",
-  "main": "src/server.js",
+  "description": "Convert SVGA and animated WebP gift animations to MP4 video with background image compositing",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "src/",
+    "proto/"
+  ],
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
+  "keywords": [
+    "svga",
+    "webp",
+    "mp4",
+    "animation",
+    "converter",
+    "ffmpeg",
+    "gift"
+  ],
+  "author": "",
+  "license": "MIT",
   "engines": {
     "node": ">=18"
   },
@@ -21,7 +37,12 @@
     "sharp": "^0.34.5",
     "uuid": "^9.0.0"
   },
-  "devDependencies": {
-    "nodemon": "^3.0.2"
+  "peerDependencies": {
+    "express": "^4.x"
+  },
+  "peerDependenciesMeta": {
+    "express": {
+      "optional": true
+    }
   }
 }
