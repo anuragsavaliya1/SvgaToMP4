@@ -168,19 +168,39 @@ function createExpressRouter(defaultOptions = {}) {
         fs.mkdirSync(framesDir, { recursive: true });
         fs.mkdirSync(audioDir,  { recursive: true });
 
-        const animData   = await parseSvga(uploadedPath);
-        const { params } = animData;
+        const fileExt = path.extname(svgaFile.originalname).toLowerCase();
+        const isWebp  = fileExt === '.webp';
 
-        const audioFiles = await extractAudio(animData, audioDir);
-        const audioPath  = pickPrimaryAudio(audioFiles, params.frames);
+        let fps, frameCount, outWidth, outHeight, hasAudio, audioPath;
 
-        await renderFrames(animData, framesDir, { width, height, background, backgroundImage: bgImage, topReserved });
+        if (isWebp) {
+          const parsed = await parseWebp(uploadedPath);
+          fps        = parsed.meta.fps;
+          frameCount = parsed.meta.frames;
+          outWidth   = width  || parsed.meta.width;
+          outHeight  = height || parsed.meta.height;
+          hasAudio   = false;
+          audioPath  = undefined;
+          await renderWebpFrames(parsed, framesDir, { backgroundImage: bgImage, background, topReserved });
+        } else {
+          const animData   = await parseSvga(uploadedPath);
+          const { params } = animData;
+          fps        = params.fps;
+          frameCount = params.frames;
+          outWidth   = width  || Math.ceil(params.viewBoxWidth);
+          outHeight  = height || Math.ceil(params.viewBoxHeight);
+
+          const audioFiles = await extractAudio(animData, audioDir);
+          hasAudio  = audioFiles.length > 0;
+          audioPath = pickPrimaryAudio(audioFiles, params.frames);
+          await renderFrames(animData, framesDir, { width, height, background, backgroundImage: bgImage, topReserved });
+        }
 
         const outputFileName = `${jobId}.${format}`;
         const outputPath     = path.join(defaultOutputDir, outputFileName);
         fs.mkdirSync(defaultOutputDir, { recursive: true });
 
-        await encodeVideo({ framesDir, fps: params.fps, outputPath, audioPath: audioPath || undefined, format, width, height });
+        await encodeVideo({ framesDir, fps, outputPath, audioPath: audioPath || undefined, format, width, height });
 
         const downloadUrl = `/outputs/${outputFileName}`;
 
@@ -189,11 +209,11 @@ function createExpressRouter(defaultOptions = {}) {
           jobId,
           downloadUrl,
           format,
-          fps:      params.fps,
-          frames:   params.frames,
-          width:    width  || Math.ceil(params.viewBoxWidth),
-          height:   height || Math.ceil(params.viewBoxHeight),
-          hasAudio: audioFiles.length > 0,
+          fps,
+          frames:   frameCount,
+          width:    outWidth,
+          height:   outHeight,
+          hasAudio,
         });
 
       } catch (err) {
