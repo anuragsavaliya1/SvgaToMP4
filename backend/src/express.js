@@ -6,6 +6,7 @@ const path     = require('path');
 const fs       = require('fs');
 const os       = require('os');
 const { v4: uuidv4 } = require('uuid');
+const log = require('./utils/logger')('router');
 
 const { parseSvga }                        = require('./services/svgaParser');
 const { renderFrames }                     = require('./services/frameRenderer');
@@ -71,7 +72,6 @@ function createExpressRouter(defaultOptions = {}) {
   });
 
   // ── POST /mp4 ────────────────────────────────────────────────────────────────
-  // Simple endpoint: upload .svga or .webp → { url } or { error }
   router.post('/mp4', upload.single('file'), async (req, res) => {
     const jobId      = uuidv4();
     const tmpDir     = path.join(os.tmpdir(), `svga-gift-${jobId}`);
@@ -80,6 +80,7 @@ function createExpressRouter(defaultOptions = {}) {
 
     try {
       if (!req.file) {
+        log.warn(`[job:${jobId}] POST /mp4 — no file in request`);
         return res.status(400).json({ error: 'No file uploaded. Send the file as form-data field "file".' });
       }
 
@@ -88,6 +89,8 @@ function createExpressRouter(defaultOptions = {}) {
       const ext    = path.extname(req.file.originalname).toLowerCase();
       const isWebp = ext === '.webp';
 
+      log.info(`[job:${jobId}] POST /mp4 — file: ${req.file.originalname} (${(req.file.size / 1024).toFixed(1)} KB) | format: ${format}`);
+
       const bgImage  = defaultBgImage && fs.existsSync(defaultBgImage) ? defaultBgImage : null;
       const outDir   = defaultOutputDir;
       fs.mkdirSync(framesDir, { recursive: true });
@@ -95,11 +98,13 @@ function createExpressRouter(defaultOptions = {}) {
       let fps, audioPath;
 
       if (isWebp) {
+        log.info(`[job:${jobId}] Processing as animated WebP`);
         const parsed = await parseWebp(uploadedPath);
         fps = parsed.meta.fps;
         await renderWebpFrames(parsed, framesDir, { backgroundImage: bgImage, background: defaultBackground, topReserved: defaultTopReserved });
         audioPath = undefined;
       } else {
+        log.info(`[job:${jobId}] Processing as SVGA`);
         const audioDir = path.join(tmpDir, 'audio');
         fs.mkdirSync(audioDir, { recursive: true });
 
@@ -117,10 +122,12 @@ function createExpressRouter(defaultOptions = {}) {
       await encodeVideo({ framesDir, fps, outputPath, audioPath, format });
 
       const baseUrl = `${req.protocol}://${req.get('host')}`;
-      return res.json({ url: `${baseUrl}/outputs/${outputFileName}` });
+      const url = `${baseUrl}/outputs/${outputFileName}`;
+      log.info(`[job:${jobId}] POST /mp4 — done | url: ${url}`);
+      return res.json({ url });
 
     } catch (err) {
-      console.error(`[svga-gift-converter][${jobId}] /mp4 error:`, err.message);
+      log.error(`[job:${jobId}] POST /mp4 failed: ${err.message}`);
       return res.status(500).json({ error: err.message });
     } finally {
       removeDir(tmpDir);
@@ -142,19 +149,25 @@ function createExpressRouter(defaultOptions = {}) {
       try {
         const svgaFile = req.files && req.files['file'] && req.files['file'][0];
         if (!svgaFile) {
+          log.warn(`[job:${jobId}] POST /convert — no file in request`);
           return res.status(400).json({ success: false, error: 'No file uploaded' });
         }
 
         uploadedPath = svgaFile.path;
+        log.info(`[job:${jobId}] POST /convert — file: ${svgaFile.originalname} (${(svgaFile.size / 1024).toFixed(1)} KB)`);
 
         const bgFile   = req.files && req.files['backgroundImage'] && req.files['backgroundImage'][0];
         uploadedBgPath = bgFile ? bgFile.path : null;
+        if (bgFile) log.info(`[job:${jobId}] Custom background image uploaded: ${bgFile.originalname}`);
 
         let bgImage = null;
         if (uploadedBgPath) {
           bgImage = uploadedBgPath;
         } else if (defaultBgImage && fs.existsSync(defaultBgImage)) {
           bgImage = defaultBgImage;
+          log.info(`[job:${jobId}] Using default background: ${path.basename(defaultBgImage)}`);
+        } else {
+          log.info(`[job:${jobId}] No background image — using color fallback`);
         }
 
         const width       = req.body.width  ? parseInt(req.body.width,  10) : undefined;
@@ -204,6 +217,12 @@ function createExpressRouter(defaultOptions = {}) {
 
         const downloadUrl = `/outputs/${outputFileName}`;
 
+        log.info(
+          `[job:${jobId}] POST /convert — done | ` +
+          `${outWidth}x${outHeight} ${fps}fps ${frameCount}frames ` +
+          `hasAudio:${hasAudio} → ${downloadUrl}`
+        );
+
         return res.json({
           success: true,
           jobId,
@@ -217,7 +236,7 @@ function createExpressRouter(defaultOptions = {}) {
         });
 
       } catch (err) {
-        console.error(`[svga-gift-converter][${jobId}] /convert error:`, err.message);
+        log.error(`[job:${jobId}] POST /convert failed: ${err.message}`);
         return res.status(500).json({ success: false, error: err.message });
       } finally {
         removeDir(tmpDir);
@@ -236,10 +255,12 @@ function createExpressRouter(defaultOptions = {}) {
 
     try {
       if (!req.file) {
+        log.warn(`[job:${jobId}] POST /audio — no file in request`);
         return res.status(400).json({ success: false, error: 'No file uploaded' });
       }
 
       uploadedPath = req.file.path;
+      log.info(`[job:${jobId}] POST /audio — file: ${req.file.originalname} (${(req.file.size / 1024).toFixed(1)} KB)`);
 
       const animData = await parseSvga(uploadedPath);
       const audioDir = path.join(tmpDir, 'audio');
@@ -248,6 +269,7 @@ function createExpressRouter(defaultOptions = {}) {
       const audioFiles = await extractAudio(animData, audioDir);
 
       if (audioFiles.length === 0) {
+        log.info(`[job:${jobId}] POST /audio — no audio tracks in SVGA`);
         return res.json({ success: true, tracks: [], message: 'No audio found in SVGA' });
       }
 
@@ -257,6 +279,7 @@ function createExpressRouter(defaultOptions = {}) {
         const outPath = path.join(defaultOutputDir, outName);
         fs.mkdirSync(defaultOutputDir, { recursive: true });
         fs.copyFileSync(af.filePath, outPath);
+        log.info(`[job:${jobId}] Audio track saved — key="${af.key}" → /outputs/${outName}`);
         tracks.push({
           key:         af.key,
           downloadUrl: `/outputs/${outName}`,
@@ -268,10 +291,11 @@ function createExpressRouter(defaultOptions = {}) {
         });
       }
 
+      log.info(`[job:${jobId}] POST /audio — done | ${tracks.length} track(s) returned`);
       return res.json({ success: true, tracks });
 
     } catch (err) {
-      console.error(`[svga-gift-converter][${jobId}] /audio error:`, err.message);
+      log.error(`[job:${jobId}] POST /audio failed: ${err.message}`);
       return res.status(500).json({ success: false, error: err.message });
     } finally {
       removeDir(tmpDir);

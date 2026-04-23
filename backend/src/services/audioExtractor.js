@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const log = require('../utils/logger')('audioExtractor');
 
 /**
  * Extract audio files from parsed SVGA data and write them to disk.
@@ -15,16 +16,25 @@ async function extractAudio(animData, outDir) {
   const results = [];
 
   if (!audioBuffers || Object.keys(audioBuffers).length === 0) {
+    log.info('No audio buffers found in SVGA data');
     return results;
   }
+
+  log.info(`Extracting ${Object.keys(audioBuffers).length} audio track(s) to: ${outDir}`);
 
   for (const [key, audioInfo] of Object.entries(audioBuffers)) {
     const ext = audioInfo.ext || '.mp3';
     const filePath = path.join(outDir, `audio_${key}${ext}`);
     fs.writeFileSync(filePath, audioInfo.data);
 
-    // Find matching audio metadata from the protobuf audios array
     const meta = (audios || []).find((a) => a.audioKey === key) || {};
+
+    log.info(
+      `Audio track written — key="${key}" ext="${ext}" ` +
+      `size=${(audioInfo.data.length / 1024).toFixed(1)}KB ` +
+      `startFrame=${meta.startFrame || 0} endFrame=${meta.endFrame || 0} ` +
+      `startTime=${meta.startTime || 0}ms totalTime=${meta.totalTime || 0}ms`
+    );
 
     results.push({
       key,
@@ -37,6 +47,7 @@ async function extractAudio(animData, outDir) {
     });
   }
 
+  log.info(`Audio extraction complete — ${results.length} track(s) extracted`);
   return results;
 }
 
@@ -49,8 +60,14 @@ async function extractAudio(animData, outDir) {
  * @returns {string|null} filePath of the chosen audio, or null
  */
 function pickPrimaryAudio(audioFiles, totalFrames) {
-  if (!audioFiles || audioFiles.length === 0) return null;
-  if (audioFiles.length === 1) return audioFiles[0].filePath;
+  if (!audioFiles || audioFiles.length === 0) {
+    log.info('No audio tracks available — video will be silent');
+    return null;
+  }
+  if (audioFiles.length === 1) {
+    log.info(`Using single audio track: key="${audioFiles[0].key}" path=${audioFiles[0].filePath}`);
+    return audioFiles[0].filePath;
+  }
 
   // Prefer track covering most frames
   let best = audioFiles[0];
@@ -64,6 +81,10 @@ function pickPrimaryAudio(audioFiles, totalFrames) {
     }
   }
 
+  log.info(
+    `Multiple audio tracks (${audioFiles.length}) — selected primary: ` +
+    `key="${best.key}" span=${bestSpan} frames (out of ${totalFrames})`
+  );
   return best.filePath;
 }
 

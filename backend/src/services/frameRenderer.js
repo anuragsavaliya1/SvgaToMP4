@@ -3,6 +3,7 @@
 const { createCanvas, loadImage } = require('canvas');
 const fs = require('fs');
 const path = require('path');
+const log = require('../utils/logger')('frameRenderer');
 
 /**
  * Render all frames of an SVGA animation to PNG files.
@@ -37,42 +38,64 @@ async function renderFrames(animData, framesDir, options = {}) {
   let canvasW, canvasH;
 
   if (backgroundImage) {
+    log.info(`Loading background image: ${path.basename(backgroundImage)}`);
     bgImage = await loadImage(backgroundImage);
-    // Canvas matches the background image exactly
     canvasW = bgImage.width;
     canvasH = bgImage.height;
+    log.info(`Background loaded: ${canvasW}x${canvasH}`);
   } else {
     canvasW = options.width  || Math.ceil(params.viewBoxWidth)  || 480;
     canvasH = options.height || Math.ceil(params.viewBoxHeight) || 480;
+    log.info(`No background image — canvas: ${canvasW}x${canvasH} fill: ${background}`);
   }
 
   // ── Compute SVGA placement inside the bottom (1-topReserved) area ─────────
-  //   Available area for the animation:
-  const areaY = Math.round(canvasH * topReserved);   // top of the animation zone
-  const areaH = canvasH - areaY;                      // height of the animation zone
+  const areaY = Math.round(canvasH * topReserved);
+  const areaH = canvasH - areaY;
   const areaW = canvasW;
 
   const svgaW = params.viewBoxWidth  || canvasW;
   const svgaH = params.viewBoxHeight || canvasH;
 
-  // Scale to fit inside the available area, preserving aspect ratio
   const scale = Math.min(areaW / svgaW, areaH / svgaH);
   const drawW = svgaW * scale;
   const drawH = svgaH * scale;
 
-  // Center horizontally; align to bottom of the available area
   const offsetX = (areaW - drawW) / 2;
-  const offsetY = areaY + (areaH - drawH);   // bottom-aligned within the zone
+  const offsetY = areaY + (areaH - drawH);
+
+  log.info(
+    `Layout — svga: ${svgaW}x${svgaH} | scale: ${scale.toFixed(3)} | ` +
+    `draw: ${drawW.toFixed(0)}x${drawH.toFixed(0)} | ` +
+    `offset: (${offsetX.toFixed(0)}, ${offsetY.toFixed(0)}) | topReserved: ${topReserved}`
+  );
 
   // ── Pre-load sprite images ────────────────────────────────────────────────
   const imageCache = {};
+  let loadedImages = 0, failedImages = 0;
   for (const [key, buf] of Object.entries(imageBuffers)) {
-    try { imageCache[key] = await loadImage(buf); } catch { /* skip */ }
+    try {
+      imageCache[key] = await loadImage(buf);
+      loadedImages++;
+      log.debug(`Sprite image loaded: key="${key}" ${imageCache[key].width}x${imageCache[key].height}`);
+    } catch (err) {
+      failedImages++;
+      log.warn(`Sprite image failed to load: key="${key}" — ${err.message}`);
+    }
   }
+  log.info(`Sprite images: ${loadedImages} loaded, ${failedImages} failed | sprites: ${sprites.length}`);
+
+  log.info(`Rendering ${totalFrames} frames to: ${framesDir}`);
+  const startTime = Date.now();
+  const logStep = Math.max(1, Math.floor(totalFrames / 10)); // log every ~10%
 
   const framePaths = [];
 
   for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
+    if (frameIndex === 0 || (frameIndex + 1) % logStep === 0 || frameIndex === totalFrames - 1) {
+      const pct = (((frameIndex + 1) / totalFrames) * 100).toFixed(0);
+      log.info(`Rendering frame ${frameIndex + 1}/${totalFrames} (${pct}%)`);
+    }
     const canvas = createCanvas(canvasW, canvasH);
     const ctx = canvas.getContext('2d');
 
@@ -120,6 +143,8 @@ async function renderFrames(animData, framesDir, options = {}) {
     framePaths.push(framePath);
   }
 
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+  log.info(`Frame rendering complete — ${totalFrames} frames in ${elapsed}s (${(totalFrames / elapsed).toFixed(1)} fps)`);
   return framePaths;
 }
 

@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const log = require('./logger')('cleanup');
 
 /**
  * Recursively delete a directory and all its contents.
@@ -46,7 +47,7 @@ function purgeOldFiles(dirPath, maxAgeMs) {
       const stat = fs.statSync(full);
       if (stat.isFile() && now - stat.mtimeMs > maxAgeMs) {
         fs.unlinkSync(full);
-        console.log(`[cleanup] purged old file: ${full}`);
+        log.info(`Purged old output file: ${name}`);
       }
     } catch {
       // ignore per-file errors
@@ -63,9 +64,7 @@ function purgeOldFiles(dirPath, maxAgeMs) {
  * @returns {NodeJS.Timeout}   - The interval handle (call clearInterval to stop)
  */
 function scheduleOutputPurge(outputDir, maxAgeMs = 60 * 60 * 1000, intervalMs = 30 * 60 * 1000) {
-  console.log(
-    `[cleanup] scheduling output purge every ${intervalMs / 60000} min, max age ${maxAgeMs / 60000} min`
-  );
+  log.info(`Scheduling output purge — every ${intervalMs / 60000} min, max age ${maxAgeMs / 60000} min`);
   return setInterval(() => {
     purgeOldFiles(outputDir, maxAgeMs);
   }, intervalMs);
