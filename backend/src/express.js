@@ -176,7 +176,8 @@ function createExpressRouter(defaultOptions = {}) {
         const format        = req.body.format === 'webm' ? 'webm' : 'mp4';
         const background    = req.body.background || defaultBackground;
         const topReserved   = req.body.topReserved != null ? parseFloat(req.body.topReserved) : defaultTopReserved;
-        const includeStills = req.body.includeStills === 'true' || req.body.includeStills === true;
+        // stills are ON by default; pass includeStills=false to skip them
+        const includeStills = req.body.includeStills !== 'false' && req.body.includeStills !== false;
 
         const framesDir = path.join(tmpDir, 'frames');
         const audioDir  = path.join(tmpDir, 'audio');
@@ -219,26 +220,32 @@ function createExpressRouter(defaultOptions = {}) {
 
         const downloadUrl = `/outputs/${outputFileName}`;
 
-        // ── Optional: extract stills from the original source animation ─────
+        // ── Extract stills from the original source animation ────────────────
+        // Always runs unless the caller explicitly sends includeStills=false.
+        // Failures are caught and reported without aborting the video response.
         let stillsResult = [];
         if (includeStills) {
           log.info(`[job:${jobId}] Extracting stills from original source...`);
-          const rawStills = await extractStills(uploadedPath, {
-            outputDir:       defaultOutputDir,
-            positions:       [0.20, 0.50, 0.80],
-            imageFormat:     'png',
-            backgroundImage: bgImage,
-            background,
-            topReserved,
-            prefix:          `${jobId}_still`,
-          });
-          const baseUrl = `${req.protocol}://${req.get('host')}`;
-          stillsResult = rawStills.map(s => ({
-            position:   s.position,
-            frameIndex: s.frameIndex,
-            url:        `${baseUrl}/outputs/${s.fileName}`,
-          }));
-          log.info(`[job:${jobId}] ${stillsResult.length} still(s) included in response`);
+          try {
+            const rawStills = await extractStills(uploadedPath, {
+              outputDir:       defaultOutputDir,
+              positions:       [0.20, 0.50, 0.80],
+              imageFormat:     'png',
+              backgroundImage: bgImage,
+              background,
+              topReserved,
+              prefix:          `${jobId}_still`,
+            });
+            const baseUrl = `${req.protocol}://${req.get('host')}`;
+            stillsResult = rawStills.map(s => ({
+              position:   s.position,
+              frameIndex: s.frameIndex,
+              url:        `${baseUrl}/outputs/${s.fileName}`,
+            }));
+            log.info(`[job:${jobId}] ${stillsResult.length} still(s) ready`);
+          } catch (stillsErr) {
+            log.error(`[job:${jobId}] Stills extraction failed (video still returned): ${stillsErr.message}`);
+          }
         }
 
         log.info(
@@ -257,7 +264,7 @@ function createExpressRouter(defaultOptions = {}) {
           width:    outWidth,
           height:   outHeight,
           hasAudio,
-          ...(includeStills && { stills: stillsResult }),
+          stills: stillsResult,
         });
 
       } catch (err) {
