@@ -2,9 +2,12 @@
 
 const ffmpeg = require('fluent-ffmpeg');
 const path = require('path');
+const fs = require('fs');
+const log = require('../utils/logger')('videoEncoder');
 
 // Use system ffmpeg; override via FFMPEG_PATH env var if needed
 if (process.env.FFMPEG_PATH) {
+  log.info(`Using custom FFmpeg path: ${process.env.FFMPEG_PATH}`);
   ffmpeg.setFfmpegPath(process.env.FFMPEG_PATH);
 }
 
@@ -32,12 +35,18 @@ function encodeVideo(opts) {
     height,
   } = opts;
 
+  log.info(
+    `Encode start — format: ${format} | fps: ${fps} | ` +
+    `audio: ${audioPath ? path.basename(audioPath) : 'none'} | ` +
+    `output: ${path.basename(outputPath)}`
+  );
+  if (width || height) log.info(`Output size override: ${width || 'auto'}x${height || 'auto'}`);
+
   return new Promise((resolve, reject) => {
     const framePattern = path.join(framesDir, 'frame_%06d.png');
 
     const cmd = ffmpeg();
 
-    // Input: image sequence
     cmd
       .input(framePattern)
       .inputOptions([
@@ -45,12 +54,10 @@ function encodeVideo(opts) {
         '-start_number 0',
       ]);
 
-    // Input: audio (if present)
     if (audioPath) {
       cmd.input(audioPath);
     }
 
-    // Video filters: scale to even dimensions (required by most codecs)
     const scaleFilter = buildScaleFilter(width, height);
 
     if (format === 'webm') {
@@ -59,20 +66,17 @@ function encodeVideo(opts) {
         '-crf 30',
         '-b:v 0',
         scaleFilter,
-        '-pix_fmt yuva420p', // preserve alpha in webm
+        '-pix_fmt yuva420p',
         '-auto-alt-ref 0',
       ]);
-      if (audioPath) {
-        cmd.audioCodec('libopus');
-      }
+      if (audioPath) cmd.audioCodec('libopus');
     } else {
-      // mp4
       cmd.videoCodec('libx264');
       cmd.outputOptions([
         '-crf 23',
         '-preset fast',
         scaleFilter,
-        '-pix_fmt yuv420p', // required for broad compatibility
+        '-pix_fmt yuv420p',
         '-movflags +faststart',
       ]);
       if (audioPath) {
@@ -82,26 +86,31 @@ function encodeVideo(opts) {
     }
 
     if (audioPath) {
-      cmd.outputOptions(['-shortest']); // end when shorter stream ends
+      cmd.outputOptions(['-shortest']);
     }
+
+    const startTime = Date.now();
 
     cmd
       .output(outputPath)
       .on('start', (cmdLine) => {
-        console.log('[ffmpeg] start:', cmdLine);
+        log.info(`FFmpeg command: ${cmdLine}`);
       })
       .on('progress', (progress) => {
-        if (progress.percent) {
-          process.stdout.write(`\r[ffmpeg] ${Math.floor(progress.percent)}%`);
+        if (progress.percent != null) {
+          log.info(`Encoding progress: ${Math.floor(progress.percent)}% | frames: ${progress.frames || '?'} | speed: ${progress.currentFps || '?'} fps`);
         }
       })
       .on('end', () => {
-        process.stdout.write('\n');
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+        let sizeKB = '?';
+        try { sizeKB = (fs.statSync(outputPath).size / 1024).toFixed(1); } catch {}
+        log.info(`Encode complete — ${elapsed}s | output size: ${sizeKB} KB | path: ${outputPath}`);
         resolve(outputPath);
       })
       .on('error', (err, stdout, stderr) => {
-        console.error('[ffmpeg] error:', err.message);
-        console.error('[ffmpeg] stderr:', stderr);
+        log.error(`FFmpeg failed: ${err.message}`);
+        log.error(`FFmpeg stderr: ${stderr}`);
         reject(new Error(`FFmpeg failed: ${err.message}`));
       })
       .run();

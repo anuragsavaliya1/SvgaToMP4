@@ -19,6 +19,9 @@ const OUTPUTS_DIR = path.join(__dirname, 'outputs');
 const BG_IMAGE    = path.join(__dirname, 'Frame_1000004515.png');
 
 fs.mkdirSync(OUTPUTS_DIR, { recursive: true });
+// Legacy svgaRouter needs these directories
+fs.mkdirSync(path.join(__dirname, 'uploads'), { recursive: true });
+fs.mkdirSync(path.join(__dirname, 'temp'),    { recursive: true });
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

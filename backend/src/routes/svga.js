@@ -5,6 +5,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
+const log = require('../utils/logger')('svga-route');
 
 const { parseSvga } = require('../services/svgaParser');
 const { renderFrames } = require('../services/frameRenderer');
@@ -85,35 +86,30 @@ router.post('/convert', upload.fields([{ name: 'file', maxCount: 1 }, { name: 'b
     const format = req.body.format === 'webm' ? 'webm' : 'mp4';
     const background = req.body.background || (format === 'mp4' ? '#ffffff' : 'transparent');
 
-    console.log(`[${jobId}] Parsing SVGA…`);
+    log.info(`[job:${jobId}] POST /convert — file: ${svgaFile.originalname}`);
+    log.info(`[job:${jobId}] Parsing SVGA...`);
     const animData = await parseSvga(uploadedPath);
 
     const { params } = animData;
-    console.log(
-      `[${jobId}] viewBox=${params.viewBoxWidth}x${params.viewBoxHeight} fps=${params.fps} frames=${params.frames}`
-    );
+    log.info(`[job:${jobId}] viewBox=${params.viewBoxWidth}x${params.viewBoxHeight} fps=${params.fps} frames=${params.frames}`);
 
-    // Create temp sub-directories for this job
     const framesDir = path.join(jobTempDir, 'frames');
     const audioDir = path.join(jobTempDir, 'audio');
     fs.mkdirSync(framesDir, { recursive: true });
     fs.mkdirSync(audioDir, { recursive: true });
 
-    // Extract audio
-    console.log(`[${jobId}] Extracting audio…`);
+    log.info(`[job:${jobId}] Extracting audio...`);
     const audioFiles = await extractAudio(animData, audioDir);
     const audioPath = pickPrimaryAudio(audioFiles, params.frames);
-    console.log(`[${jobId}] Audio tracks found: ${audioFiles.length}`);
+    log.info(`[job:${jobId}] Audio tracks found: ${audioFiles.length}`);
 
-    // Render frames
-    console.log(`[${jobId}] Rendering ${params.frames} frames… (bg: ${backgroundImage || background})`);
+    log.info(`[job:${jobId}] Rendering ${params.frames} frames (bg: ${backgroundImage || background})`);
     await renderFrames(animData, framesDir, { width, height, background, backgroundImage });
 
-    // Encode video
     const outputFileName = `${jobId}.${format}`;
     const outputPath = path.join(OUTPUTS_DIR, outputFileName);
 
-    console.log(`[${jobId}] Encoding video (${format})…`);
+    log.info(`[job:${jobId}] Encoding video (${format})...`);
     await encodeVideo({
       framesDir,
       fps: params.fps,
@@ -124,10 +120,8 @@ router.post('/convert', upload.fields([{ name: 'file', maxCount: 1 }, { name: 'b
       height,
     });
 
-    // Build download URL (relative; frontend/nginx should serve /outputs)
     const downloadUrl = `/outputs/${outputFileName}`;
-
-    console.log(`[${jobId}] Done → ${outputPath}`);
+    log.info(`[job:${jobId}] Done → ${outputPath}`);
 
     res.json({
       success: true,
@@ -141,7 +135,7 @@ router.post('/convert', upload.fields([{ name: 'file', maxCount: 1 }, { name: 'b
       hasAudio: audioFiles.length > 0,
     });
   } catch (err) {
-    console.error(`[${jobId}] Error:`, err.message);
+    log.error(`[job:${jobId}] POST /convert failed: ${err.message}`);
     res.status(500).json({ success: false, error: err.message });
   } finally {
     // Clean up temp frames & audio (keep the output file)
@@ -201,7 +195,7 @@ router.post('/audio', upload.single('file'), async (req, res) => {
 
     res.json({ success: true, tracks });
   } catch (err) {
-    console.error(`[${jobId}] Audio extract error:`, err.message);
+    log.error(`[job:${jobId}] POST /audio failed: ${err.message}`);
     res.status(500).json({ success: false, error: err.message });
   } finally {
     removeDir(jobTempDir);
@@ -275,7 +269,7 @@ router.post('/mp4', upload.single('file'), async (req, res) => {
     return res.json({ url: `${baseUrl}/outputs/${outputFileName}` });
 
   } catch (err) {
-    console.error(`[${jobId}] /mp4 error:`, err.message);
+    log.error(`[job:${jobId}] POST /mp4 failed: ${err.message}`);
     return res.status(500).json({ error: err.message });
   } finally {
     removeDir(jobTempDir);

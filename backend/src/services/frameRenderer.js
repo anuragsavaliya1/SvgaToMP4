@@ -3,6 +3,7 @@
 const { createCanvas, loadImage } = require('canvas');
 const fs = require('fs');
 const path = require('path');
+const log = require('../utils/logger')('frameRenderer');
 
 /**
  * Render all frames of an SVGA animation to PNG files.
@@ -37,42 +38,64 @@ async function renderFrames(animData, framesDir, options = {}) {
   let canvasW, canvasH;
 
   if (backgroundImage) {
+    log.info(`Loading background image: ${path.basename(backgroundImage)}`);
     bgImage = await loadImage(backgroundImage);
-    // Canvas matches the background image exactly
     canvasW = bgImage.width;
     canvasH = bgImage.height;
+    log.info(`Background loaded: ${canvasW}x${canvasH}`);
   } else {
     canvasW = options.width  || Math.ceil(params.viewBoxWidth)  || 480;
     canvasH = options.height || Math.ceil(params.viewBoxHeight) || 480;
+    log.info(`No background image — canvas: ${canvasW}x${canvasH} fill: ${background}`);
   }
 
   // ── Compute SVGA placement inside the bottom (1-topReserved) area ─────────
-  //   Available area for the animation:
-  const areaY = Math.round(canvasH * topReserved);   // top of the animation zone
-  const areaH = canvasH - areaY;                      // height of the animation zone
+  const areaY = Math.round(canvasH * topReserved);
+  const areaH = canvasH - areaY;
   const areaW = canvasW;
 
   const svgaW = params.viewBoxWidth  || canvasW;
   const svgaH = params.viewBoxHeight || canvasH;
 
-  // Scale to fit inside the available area, preserving aspect ratio
   const scale = Math.min(areaW / svgaW, areaH / svgaH);
   const drawW = svgaW * scale;
   const drawH = svgaH * scale;
 
-  // Center horizontally; align to bottom of the available area
   const offsetX = (areaW - drawW) / 2;
-  const offsetY = areaY + (areaH - drawH);   // bottom-aligned within the zone
+  const offsetY = areaY + (areaH - drawH);
+
+  log.info(
+    `Layout — svga: ${svgaW}x${svgaH} | scale: ${scale.toFixed(3)} | ` +
+    `draw: ${drawW.toFixed(0)}x${drawH.toFixed(0)} | ` +
+    `offset: (${offsetX.toFixed(0)}, ${offsetY.toFixed(0)}) | topReserved: ${topReserved}`
+  );
 
   // ── Pre-load sprite images ────────────────────────────────────────────────
   const imageCache = {};
+  let loadedImages = 0, failedImages = 0;
   for (const [key, buf] of Object.entries(imageBuffers)) {
-    try { imageCache[key] = await loadImage(buf); } catch { /* skip */ }
+    try {
+      imageCache[key] = await loadImage(buf);
+      loadedImages++;
+      log.debug(`Sprite image loaded: key="${key}" ${imageCache[key].width}x${imageCache[key].height}`);
+    } catch (err) {
+      failedImages++;
+      log.warn(`Sprite image failed to load: key="${key}" — ${err.message}`);
+    }
   }
+  log.info(`Sprite images: ${loadedImages} loaded, ${failedImages} failed | sprites: ${sprites.length}`);
+
+  log.info(`Rendering ${totalFrames} frames to: ${framesDir}`);
+  const startTime = Date.now();
+  const logStep = Math.max(1, Math.floor(totalFrames / 10)); // log every ~10%
 
   const framePaths = [];
 
   for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
+    if (frameIndex === 0 || (frameIndex + 1) % logStep === 0 || frameIndex === totalFrames - 1) {
+      const pct = (((frameIndex + 1) / totalFrames) * 100).toFixed(0);
+      log.info(`Rendering frame ${frameIndex + 1}/${totalFrames} (${pct}%)`);
+    }
     const canvas = createCanvas(canvasW, canvasH);
     const ctx = canvas.getContext('2d');
 
@@ -120,6 +143,8 @@ async function renderFrames(animData, framesDir, options = {}) {
     framePaths.push(framePath);
   }
 
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+  log.info(`Frame rendering complete — ${totalFrames} frames in ${elapsed}s (${(totalFrames / elapsed).toFixed(1)} fps)`);
   return framePaths;
 }
 
@@ -252,6 +277,15 @@ function drawSvgPath(ctx, d) {
         cx = x; cy = y;
         break;
       }
+      case 'A': {
+        if (args.length < 7) break;
+        const [rx, ry, xRot, largeArc, sweep] = args;
+        const endX = rel ? cx + args[5] : args[5];
+        const endY = rel ? cy + args[6] : args[6];
+        svgArcToCanvas(ctx, cx, cy, endX, endY, rx, ry, xRot * Math.PI / 180, !!largeArc, !!sweep);
+        cx = endX; cy = endY;
+        break;
+      }
       case 'Z':
         ctx.closePath();
         break;
@@ -261,18 +295,62 @@ function drawSvgPath(ctx, d) {
   }
 }
 
+/**
+ * Convert SVG endpoint arc parameterization to canvas ellipse() call.
+ * Implements the W3C SVG spec conversion algorithm.
+ */
+function svgArcToCanvas(ctx, x1, y1, x2, y2, rx, ry, phi, largeArc, sweep) {
+  if (x1 === x2 && y1 === y2) return;
+  if (rx === 0 || ry === 0) { ctx.lineTo(x2, y2); return; }
+  rx = Math.abs(rx);
+  ry = Math.abs(ry);
+  const cosPhi = Math.cos(phi);
+  const sinPhi = Math.sin(phi);
+  const dx = (x1 - x2) / 2;
+  const dy = (y1 - y2) / 2;
+  const x1p =  cosPhi * dx + sinPhi * dy;
+  const y1p = -sinPhi * dx + cosPhi * dy;
+  // Ensure radii are large enough
+  const x1pSq = x1p * x1p;
+  const y1pSq = y1p * y1p;
+  let rxSq = rx * rx;
+  let rySq = ry * ry;
+  const lambda = x1pSq / rxSq + y1pSq / rySq;
+  if (lambda > 1) { const s = Math.sqrt(lambda); rx *= s; ry *= s; rxSq = rx*rx; rySq = ry*ry; }
+  const num = Math.max(0, rxSq*rySq - rxSq*y1pSq - rySq*x1pSq);
+  const den = rxSq*y1pSq + rySq*x1pSq;
+  const coef = (largeArc !== sweep ? 1 : -1) * Math.sqrt(num / den);
+  const cxp =  coef * rx * y1p / ry;
+  const cyp = -coef * ry * x1p / rx;
+  const cx = cosPhi * cxp - sinPhi * cyp + (x1 + x2) / 2;
+  const cy = sinPhi * cxp + cosPhi * cyp + (y1 + y2) / 2;
+  const vecAngle = (ux, uy, vx, vy) => {
+    const n = Math.sqrt(ux*ux + uy*uy) * Math.sqrt(vx*vx + vy*vy);
+    let a = Math.acos(Math.max(-1, Math.min(1, (ux*vx + uy*vy) / n)));
+    if (ux*vy - uy*vx < 0) a = -a;
+    return a;
+  };
+  const ux = (x1p - cxp) / rx;
+  const uy = (y1p - cyp) / ry;
+  const vx = (-x1p - cxp) / rx;
+  const vy = (-y1p - cyp) / ry;
+  let theta  = vecAngle(1, 0, ux, uy);
+  let dtheta = vecAngle(ux, uy, vx, vy);
+  if (!sweep && dtheta > 0) dtheta -= 2 * Math.PI;
+  if ( sweep && dtheta < 0) dtheta += 2 * Math.PI;
+  ctx.ellipse(cx, cy, rx, ry, phi, theta, theta + dtheta, !sweep);
+}
+
 function parseSvgPathCommands(d) {
   const results = [];
-  const re = /([MLHVCSQTAZmlhvcsqtaz])([\d\s,.\-eE]*)/g;
+  const re = /([MLHVCSQTAZmlhvcsqtaz])([^MLHVCSQTAZmlhvcsqtaz]*)/g;
   let match;
   while ((match = re.exec(d)) !== null) {
     const type = match[1];
     const rawArgs = match[2].trim();
+    // Match all numbers including negative and scientific notation
     const args = rawArgs.length
-      ? rawArgs
-          .split(/[\s,]+/)
-          .filter(Boolean)
-          .map(Number)
+      ? (rawArgs.match(/-?[\d.]+(?:[eE][+-]?\d+)?/g) || []).map(Number)
       : [];
     results.push({ type, args });
   }
