@@ -136,14 +136,98 @@ async function renderWebpFrames(parsed, outFramesDir, options = {}) {
   return framePaths;
 }
 
-function saveCanvasToPng(canvas, filePath) {
+/**
+ * Render a specific subset of WebP animation frames and save them.
+ * Uses the same compositing logic as renderWebpFrames (background, scale, layout).
+ *
+ * @param {object}   parsed        - Result of parseWebp()
+ * @param {number[]} frameIndices  - Which frame indices to render (0-based)
+ * @param {string}   outDir        - Directory to write output images
+ * @param {object}   [options]     - Same options as renderWebpFrames plus:
+ *   imageFormat  {string}  - 'png' (default) | 'jpeg'
+ *   quality      {number}  - JPEG quality 0–100 (default 85)
+ *   prefix       {string}  - Filename prefix (default 'still')
+ * @returns {Promise<Array<{ frameIndex: number, filePath: string }>>}
+ */
+async function renderSpecificWebpFrames(parsed, frameIndices, outDir, options = {}) {
+  const { meta, frameBuffers } = parsed;
+  const topReserved = options.topReserved != null ? options.topReserved : 0.30;
+  const background  = options.background  || '#ffffff';
+  const imageFormat = options.imageFormat === 'jpeg' ? 'jpeg' : 'png';
+  const quality     = options.quality != null ? options.quality : 85;
+  const prefix      = options.prefix || 'still';
+
+  fs.mkdirSync(outDir, { recursive: true });
+
+  log.info(`Rendering ${frameIndices.length} still(s) from WebP — format: ${imageFormat} | indices: [${frameIndices.join(', ')}]`);
+
+  // ── Canvas setup ─────────────────────────────────────────────────────────
+  let bgImage = null;
+  let canvasW, canvasH;
+  if (options.backgroundImage && fs.existsSync(options.backgroundImage)) {
+    bgImage = await loadImage(options.backgroundImage);
+    canvasW = bgImage.width;
+    canvasH = bgImage.height;
+    log.info(`Background loaded: ${canvasW}x${canvasH}`);
+  } else {
+    canvasW = meta.width;
+    canvasH = meta.height;
+  }
+
+  const areaY   = Math.round(canvasH * topReserved);
+  const areaH   = canvasH - areaY;
+  const scale   = Math.min(canvasW / meta.width, areaH / meta.height);
+  const drawW   = meta.width  * scale;
+  const drawH   = meta.height * scale;
+  const offsetX = (canvasW - drawW) / 2;
+  const offsetY = areaY + (areaH - drawH);
+
+  const ext = imageFormat === 'jpeg' ? '.jpg' : '.png';
+  const results = [];
+
+  for (const frameIndex of frameIndices) {
+    if (frameIndex < 0 || frameIndex >= frameBuffers.length) {
+      log.warn(`Frame index ${frameIndex} out of range (0–${frameBuffers.length - 1}), skipping`);
+      continue;
+    }
+
+    const canvas = createCanvas(canvasW, canvasH);
+    const ctx    = canvas.getContext('2d');
+
+    if (bgImage) {
+      ctx.drawImage(bgImage, 0, 0, canvasW, canvasH);
+    } else {
+      ctx.fillStyle = background;
+      ctx.fillRect(0, 0, canvasW, canvasH);
+    }
+
+    const frame = await loadImage(frameBuffers[frameIndex]);
+    ctx.drawImage(frame, offsetX, offsetY, drawW, drawH);
+
+    const filePath = path.join(outDir, `${prefix}_${frameIndex}${ext}`);
+    await saveCanvas(canvas, filePath, imageFormat, quality);
+    log.info(`Still saved — frameIndex: ${frameIndex} → ${path.basename(filePath)}`);
+    results.push({ frameIndex, filePath });
+  }
+
+  log.info(`Still extraction complete — ${results.length} image(s) written`);
+  return results;
+}
+
+function saveCanvas(canvas, filePath, format = 'png', quality = 85) {
   return new Promise((resolve, reject) => {
     const out    = fs.createWriteStream(filePath);
-    const stream = canvas.createPNGStream();
+    const stream = format === 'jpeg'
+      ? canvas.createJPEGStream({ quality: quality / 100 })
+      : canvas.createPNGStream();
     stream.pipe(out);
     out.on('finish', resolve);
     out.on('error', reject);
   });
 }
 
-module.exports = { parseWebp, renderWebpFrames };
+function saveCanvasToPng(canvas, filePath) {
+  return saveCanvas(canvas, filePath, 'png');
+}
+
+module.exports = { parseWebp, renderWebpFrames, renderSpecificWebpFrames };

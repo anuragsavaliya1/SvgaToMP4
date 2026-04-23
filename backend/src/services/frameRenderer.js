@@ -370,18 +370,137 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function saveCanvasToPng(canvas, filePath) {
+/**
+ * Save a canvas to a file. Supports 'png' and 'jpeg'.
+ * @param {Canvas} canvas
+ * @param {string} filePath  - Must end with .png or .jpg/.jpeg
+ * @param {string} [format]  - 'png' (default) | 'jpeg'
+ * @param {number} [quality] - JPEG quality 0–100 (default 85)
+ */
+function saveCanvas(canvas, filePath, format = 'png', quality = 85) {
   return new Promise((resolve, reject) => {
     const out = fs.createWriteStream(filePath);
-    const stream = canvas.createPNGStream();
+    const stream = format === 'jpeg'
+      ? canvas.createJPEGStream({ quality: quality / 100 })
+      : canvas.createPNGStream();
     stream.pipe(out);
     out.on('finish', resolve);
     out.on('error', reject);
   });
 }
 
+function saveCanvasToPng(canvas, filePath) {
+  return saveCanvas(canvas, filePath, 'png');
+}
+
+/**
+ * Render a specific subset of frames from an SVGA animation and save them.
+ * Uses the same compositing logic as renderFrames (background, scale, layout).
+ *
+ * @param {object}   animData      - Parsed SVGA data from svgaParser.parseSvga()
+ * @param {number[]} frameIndices  - Which frame indices to render (0-based)
+ * @param {string}   outDir        - Directory to write output images
+ * @param {object}   [options]     - Same options as renderFrames plus:
+ *   imageFormat  {string}  - 'png' (default) | 'jpeg'
+ *   quality      {number}  - JPEG quality 0–100 (default 85)
+ *   prefix       {string}  - Filename prefix (default 'still')
+ * @returns {Promise<Array<{ frameIndex: number, filePath: string }>>}
+ */
+async function renderSpecificFrames(animData, frameIndices, outDir, options = {}) {
+  const { params, sprites, imageBuffers } = animData;
+  const background      = options.background  || 'transparent';
+  const backgroundImage = options.backgroundImage || null;
+  const topReserved     = options.topReserved != null ? options.topReserved : 0.30;
+  const imageFormat     = options.imageFormat === 'jpeg' ? 'jpeg' : 'png';
+  const quality         = options.quality != null ? options.quality : 85;
+  const prefix          = options.prefix || 'still';
+
+  if (!params.frames) throw new Error('SVGA has 0 frames');
+  fs.mkdirSync(outDir, { recursive: true });
+
+  log.info(`Rendering ${frameIndices.length} still(s) from SVGA — format: ${imageFormat} | indices: [${frameIndices.join(', ')}]`);
+
+  // ── Load background ───────────────────────────────────────────────────────
+  let bgImage = null;
+  let canvasW, canvasH;
+  if (backgroundImage) {
+    bgImage = await loadImage(backgroundImage);
+    canvasW = bgImage.width;
+    canvasH = bgImage.height;
+    log.info(`Background loaded: ${canvasW}x${canvasH}`);
+  } else {
+    canvasW = options.width  || Math.ceil(params.viewBoxWidth)  || 480;
+    canvasH = options.height || Math.ceil(params.viewBoxHeight) || 480;
+  }
+
+  const areaY  = Math.round(canvasH * topReserved);
+  const areaH  = canvasH - areaY;
+  const svgaW  = params.viewBoxWidth  || canvasW;
+  const svgaH  = params.viewBoxHeight || canvasH;
+  const scale  = Math.min(canvasW / svgaW, areaH / svgaH);
+  const drawW  = svgaW * scale;
+  const drawH  = svgaH * scale;
+  const offsetX = (canvasW - drawW) / 2;
+  const offsetY = areaY + (areaH - drawH);
+
+  // ── Pre-load sprite images ────────────────────────────────────────────────
+  const imageCache = {};
+  for (const [key, buf] of Object.entries(imageBuffers)) {
+    try { imageCache[key] = await loadImage(buf); } catch { /* skip */ }
+  }
+
+  const ext = imageFormat === 'jpeg' ? '.jpg' : '.png';
+  const results = [];
+
+  for (const frameIndex of frameIndices) {
+    if (frameIndex < 0 || frameIndex >= params.frames) {
+      log.warn(`Frame index ${frameIndex} out of range (0–${params.frames - 1}), skipping`);
+      continue;
+    }
+
+    const canvas = createCanvas(canvasW, canvasH);
+    const ctx = canvas.getContext('2d');
+
+    if (bgImage) {
+      ctx.drawImage(bgImage, 0, 0, canvasW, canvasH);
+    } else if (background === 'transparent') {
+      ctx.clearRect(0, 0, canvasW, canvasH);
+    } else {
+      ctx.fillStyle = background;
+      ctx.fillRect(0, 0, canvasW, canvasH);
+    }
+
+    ctx.save();
+    ctx.translate(offsetX, offsetY);
+    ctx.scale(scale, scale);
+
+    for (const sprite of sprites) {
+      const frameData = sprite.frames[frameIndex];
+      if (!frameData || frameData.hidden) continue;
+      const { layout, transform, alpha, shapes } = frameData;
+      ctx.save();
+      ctx.globalAlpha = clamp(alpha, 0, 1);
+      ctx.transform(transform.a, transform.b, transform.c, transform.d, transform.tx, transform.ty);
+      const img = imageCache[sprite.imageKey];
+      if (img) ctx.drawImage(img, layout.x, layout.y, layout.width || img.width, layout.height || img.height);
+      if (shapes && shapes.length > 0) drawShapes(ctx, shapes);
+      ctx.restore();
+    }
+
+    ctx.restore();
+
+    const filePath = path.join(outDir, `${prefix}_${frameIndex}${ext}`);
+    await saveCanvas(canvas, filePath, imageFormat, quality);
+    log.info(`Still saved — frameIndex: ${frameIndex} → ${path.basename(filePath)}`);
+    results.push({ frameIndex, filePath });
+  }
+
+  log.info(`Still extraction complete — ${results.length} image(s) written`);
+  return results;
+}
+
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
-module.exports = { renderFrames };
+module.exports = { renderFrames, renderSpecificFrames };
