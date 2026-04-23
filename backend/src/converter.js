@@ -10,6 +10,7 @@ const { renderFrames }         = require('./services/frameRenderer');
 const { extractAudio, pickPrimaryAudio } = require('./services/audioExtractor');
 const { parseWebp, renderWebpFrames }   = require('./services/webpParser');
 const { encodeVideo }          = require('./services/videoEncoder');
+const { extractStills: _extractStills } = require('./services/stillsExtractor');
 const { removeDir, removeFile } = require('./utils/cleanup');
 
 const DEFAULT_BG_IMAGE = path.join(__dirname, '../../example/BACKGROUND.png');
@@ -137,4 +138,19 @@ async function _encode({ jobId, framesDir, fps, audioPath, format, outputDir, ou
   return { filePath: outPath, fileName: outName };
 }
 
-module.exports = { convert };
+/**
+ * Extract still images from an SVGA or animated WebP file.
+ * Thin wrapper around stillsExtractor — kept here so the public API surface
+ * lives in converter.js alongside convert().
+ *
+ * @param {string} inputPath   - Absolute path to .svga or .webp
+ * @param {object} [options]   - Same options as stillsExtractor.extractStills()
+ * @returns {Promise<Array<{ position, frameIndex, filePath, fileName }>>}
+ */
+async function extractStills(inputPath, options = {}) {
+  const fileName = path.basename(inputPath);
+  log.info(`extractStills() delegating — file: ${fileName}`);
+  return _extractStills(inputPath, options);
+}
+
+module.exports = { convert, extractStills };

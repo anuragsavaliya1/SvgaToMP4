@@ -13,6 +13,7 @@ const { renderFrames }                     = require('./services/frameRenderer')
 const { parseWebp, renderWebpFrames }      = require('./services/webpParser');
 const { extractAudio, pickPrimaryAudio }   = require('./services/audioExtractor');
 const { encodeVideo }                      = require('./services/videoEncoder');
+const { extractStills }                    = require('./services/stillsExtractor');
 const { removeDir, removeFile }            = require('./utils/cleanup');
 
 /**
@@ -170,11 +171,12 @@ function createExpressRouter(defaultOptions = {}) {
           log.info(`[job:${jobId}] No background image — using color fallback`);
         }
 
-        const width       = req.body.width  ? parseInt(req.body.width,  10) : undefined;
-        const height      = req.body.height ? parseInt(req.body.height, 10) : undefined;
-        const format      = req.body.format === 'webm' ? 'webm' : 'mp4';
-        const background  = req.body.background || defaultBackground;
-        const topReserved = req.body.topReserved != null ? parseFloat(req.body.topReserved) : defaultTopReserved;
+        const width         = req.body.width  ? parseInt(req.body.width,  10) : undefined;
+        const height        = req.body.height ? parseInt(req.body.height, 10) : undefined;
+        const format        = req.body.format === 'webm' ? 'webm' : 'mp4';
+        const background    = req.body.background || defaultBackground;
+        const topReserved   = req.body.topReserved != null ? parseFloat(req.body.topReserved) : defaultTopReserved;
+        const includeStills = req.body.includeStills === 'true' || req.body.includeStills === true;
 
         const framesDir = path.join(tmpDir, 'frames');
         const audioDir  = path.join(tmpDir, 'audio');
@@ -217,6 +219,28 @@ function createExpressRouter(defaultOptions = {}) {
 
         const downloadUrl = `/outputs/${outputFileName}`;
 
+        // ── Optional: extract stills from the original source animation ─────
+        let stillsResult = [];
+        if (includeStills) {
+          log.info(`[job:${jobId}] Extracting stills from original source...`);
+          const rawStills = await extractStills(uploadedPath, {
+            outputDir:       defaultOutputDir,
+            positions:       [0.20, 0.50, 0.80],
+            imageFormat:     'png',
+            backgroundImage: bgImage,
+            background,
+            topReserved,
+            prefix:          `${jobId}_still`,
+          });
+          const baseUrl = `${req.protocol}://${req.get('host')}`;
+          stillsResult = rawStills.map(s => ({
+            position:   s.position,
+            frameIndex: s.frameIndex,
+            url:        `${baseUrl}/outputs/${s.fileName}`,
+          }));
+          log.info(`[job:${jobId}] ${stillsResult.length} still(s) included in response`);
+        }
+
         log.info(
           `[job:${jobId}] POST /convert — done | ` +
           `${outWidth}x${outHeight} ${fps}fps ${frameCount}frames ` +
@@ -233,6 +257,7 @@ function createExpressRouter(defaultOptions = {}) {
           width:    outWidth,
           height:   outHeight,
           hasAudio,
+          ...(includeStills && { stills: stillsResult }),
         });
 
       } catch (err) {
@@ -302,6 +327,91 @@ function createExpressRouter(defaultOptions = {}) {
       if (uploadedPath) removeFile(uploadedPath);
     }
   });
+
+  // ── POST /stills ─────────────────────────────────────────────────────────────
+  // Extract still images directly from the original SVGA or animated WebP source.
+  // Never reads from the transcoded MP4/WebM — images come straight from the
+  // parsed animation timeline.
+  //
+  // Body (multipart/form-data):
+  //   file            — .svga or .webp  (required)
+  //   backgroundImage — PNG/JPG         (optional, overrides server default)
+  //   positions       — comma-separated floats, e.g. "0.2,0.5,0.8"  (default)
+  //   imageFormat     — 'png' (default) | 'jpeg'
+  //   quality         — JPEG quality 0–100  (default: 85)
+  //   topReserved     — fraction of canvas height above animation (default: 0.30)
+  //   background      — CSS fallback colour  (default: '#ffffff')
+  //
+  // Response:
+  //   { success: true, stills: [{ position, frameIndex, url }] }
+  router.post(
+    '/stills',
+    upload.fields([{ name: 'file', maxCount: 1 }, { name: 'backgroundImage', maxCount: 1 }]),
+    async (req, res) => {
+      const jobId        = uuidv4();
+      let uploadedPath   = null;
+      let uploadedBgPath = null;
+
+      try {
+        const file = req.files && req.files['file'] && req.files['file'][0];
+        if (!file) {
+          log.warn(`[job:${jobId}] POST /stills — no file in request`);
+          return res.status(400).json({ success: false, error: 'No file uploaded' });
+        }
+
+        uploadedPath = file.path;
+        log.info(`[job:${jobId}] POST /stills — file: ${file.originalname} (${(file.size / 1024).toFixed(1)} KB)`);
+
+        // Background image: uploaded > server default > colour fallback
+        const bgFile   = req.files && req.files['backgroundImage'] && req.files['backgroundImage'][0];
+        uploadedBgPath = bgFile ? bgFile.path : null;
+        const bgImage  = uploadedBgPath
+          || (defaultBgImage && fs.existsSync(defaultBgImage) ? defaultBgImage : null);
+
+        // Parse positions from request body, default [0.20, 0.50, 0.80]
+        let positions = [0.20, 0.50, 0.80];
+        if (req.body.positions) {
+          const raw = String(req.body.positions).split(',').map(Number).filter(n => !isNaN(n) && n >= 0 && n <= 1);
+          if (raw.length > 0) positions = raw;
+        }
+
+        const imageFormat = req.body.imageFormat === 'jpeg' ? 'jpeg' : 'png';
+        const quality     = req.body.quality ? Math.min(100, Math.max(0, parseInt(req.body.quality, 10))) : 85;
+        const topReserved = req.body.topReserved != null ? parseFloat(req.body.topReserved) : defaultTopReserved;
+        const background  = req.body.background || defaultBackground;
+
+        log.info(`[job:${jobId}] Stills options — positions: [${positions.join(', ')}] | format: ${imageFormat} | quality: ${quality}`);
+
+        const stills = await extractStills(uploadedPath, {
+          outputDir:      defaultOutputDir,
+          positions,
+          imageFormat,
+          quality,
+          backgroundImage: bgImage,
+          background,
+          topReserved,
+          prefix:         jobId,
+        });
+
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const response = stills.map(s => ({
+          position:   s.position,
+          frameIndex: s.frameIndex,
+          url:        `${baseUrl}/outputs/${s.fileName}`,
+        }));
+
+        log.info(`[job:${jobId}] POST /stills — done | ${response.length} still(s) returned`);
+        return res.json({ success: true, stills: response });
+
+      } catch (err) {
+        log.error(`[job:${jobId}] POST /stills failed: ${err.message}`);
+        return res.status(500).json({ success: false, error: err.message });
+      } finally {
+        if (uploadedPath)   removeFile(uploadedPath);
+        if (uploadedBgPath) removeFile(uploadedBgPath);
+      }
+    }
+  );
 
   return router;
 }
