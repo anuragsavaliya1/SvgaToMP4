@@ -228,6 +228,7 @@ function createExpressRouter(defaultOptions = {}) {
           log.info(`[job:${jobId}] Extracting stills from original source...`);
           try {
             const rawStills = await extractStills(uploadedPath, {
+              fileType:        fileExt,          // multer strips the extension; pass it explicitly
               outputDir:       defaultOutputDir,
               positions:       [0.20, 0.50, 0.80],
               imageFormat:     'png',
@@ -382,6 +383,7 @@ function createExpressRouter(defaultOptions = {}) {
           if (raw.length > 0) positions = raw;
         }
 
+        const fileExt     = path.extname(file.originalname).toLowerCase();
         const imageFormat = req.body.imageFormat === 'jpeg' ? 'jpeg' : 'png';
         const quality     = req.body.quality ? Math.min(100, Math.max(0, parseInt(req.body.quality, 10))) : 85;
         const topReserved = req.body.topReserved != null ? parseFloat(req.body.topReserved) : defaultTopReserved;
@@ -390,14 +392,15 @@ function createExpressRouter(defaultOptions = {}) {
         log.info(`[job:${jobId}] Stills options — positions: [${positions.join(', ')}] | format: ${imageFormat} | quality: ${quality}`);
 
         const stills = await extractStills(uploadedPath, {
-          outputDir:      defaultOutputDir,
+          fileType:        fileExt,   // multer strips extension; pass it explicitly
+          outputDir:       defaultOutputDir,
           positions,
           imageFormat,
           quality,
           backgroundImage: bgImage,
           background,
           topReserved,
-          prefix:         jobId,
+          prefix:          jobId,
         });
 
         const baseUrl = `${req.protocol}://${req.get('host')}`;

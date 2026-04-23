@@ -40,7 +40,7 @@ async function extractStills(inputPath, options = {}) {
     prefix,
   } = options;
 
-  const ext      = path.extname(inputPath).toLowerCase();
+  const ext      = (options.fileType || path.extname(inputPath)).toLowerCase();
   const fileName = path.basename(inputPath);
   const jobId    = uuidv4();
   const filePrefix = prefix || jobId;
