@@ -369,4 +369,4 @@ function normalizeShape(shape) {
   };
 }
 
-module.exports = { parseSvga };
+module.exports = { parseSvga, detectAudioExtension, detectFormat };

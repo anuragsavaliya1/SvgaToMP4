@@ -111,4 +111,4 @@ function positionsToIndices(positions, totalFrames) {
   );
 }
 
-module.exports = { extractStills };
+module.exports = { extractStills, positionsToIndices };

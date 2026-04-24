@@ -503,4 +503,4 @@ function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
-module.exports = { renderFrames, renderSpecificFrames };
+module.exports = { renderFrames, renderSpecificFrames, parseSvgPathCommands, rgbaToString, clamp };

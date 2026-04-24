@@ -132,4 +132,4 @@ function makeEven(n) {
   return n % 2 === 0 ? n : n + 1;
 }
 
-module.exports = { encodeVideo };
+module.exports = { encodeVideo, buildScaleFilter, makeEven };
