@@ -150,11 +150,8 @@ See `example/server.js` for a ready-to-run integration example.
 
 Real sample files in this repo:
 
-- Input SVGA file: `backend/outputs/119040-20211122_111625_1637550985956 (1).svga`
-- Generated output MP4 file: `backend/outputs/output.mp4`
+- Input SVGA file: [Example SVGA File](</backend/outputs/119040-20211122_111625_1637550985956 (1).svga>)
+- Generated output MP4 file: [Output MP4](</backend/outputs/output.mp4>)
 
 You can use these files to quickly test the converter flow and verify output quality.
 
-## License
-
-MIT
